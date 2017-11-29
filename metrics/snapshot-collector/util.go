@@ -12,6 +12,8 @@ import (
 	"net/http/cookiejar"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -21,16 +23,46 @@ const (
 	LoginPath               = "/login"
 	DashboardAPI            = "/api/search?query="
 	DashboardAPIPrefix      = "/api/dashboards/"
+	DashboardDatasource     = "/api/datasources"
+	DatasourceProxy         = "/api/datasources/proxy/"
+	PrometheusMatchAPI      = "/api/v1/series?match[]="
 	CreateHttpClientTimeout = 15
+
+	TemplateVar                = "Host"
+	PanelsAllInOnePicturePoint = 30
 
 	PngDir     = "PngDir"
 	TimeFormat = "2006-01-02 15:04:05"
 )
 
+type Dashboard struct {
+	TemplateVar    string
+	Host           []string
+	URI            string
+	title          string
+	ID             int64
+	DataSourceID   int64
+	DataSourceType string
+	Panels         []Panel
+}
+
 type Panel struct {
 	Title string
 	ID    int64
 	URL   string
+}
+
+type URL struct {
+	Title string
+	URL   string
+}
+
+//InitDashboard init struct
+func InitDashboard() *Dashboard {
+	return &Dashboard{
+		DataSourceType: "prometheus",
+		DataSourceID:   1,
+	}
 }
 
 //NewSession crate http client
@@ -74,12 +106,12 @@ func (r *Run) XHttp(method string, url string, body io.Reader) ([]byte, error) {
 			return ioutil.ReadAll(resp.Body)
 		}
 	}
-	return nil, errors.Errorf("can not post data to url %s", url)
+	return nil, errors.Errorf("can not request url %s", url)
 }
 
 //Xget http get
-func (r *Run) Xget(urlParams string) (interface{}, error) {
-	d, err := r.XHttp("GET", fmt.Sprintf("%s%s", r.url, urlParams), nil)
+func (r *Run) Xget(url string) (interface{}, error) {
+	d, err := r.XHttp("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -91,65 +123,100 @@ func (r *Run) Xget(urlParams string) (interface{}, error) {
 
 //GetDashboards http get dashboards
 func (r *Run) GetDashboards() error {
-	iface, err := r.Xget(DashboardAPI)
+	// http://192.168.2.188:3000/api/search?query=
+	iface, err := r.Xget(fmt.Sprintf("%s%s", r.url, DashboardAPI))
 	if err != nil {
 		return err
 	}
-	r.JSONData(iface, "")
-	close(r.dashboards)
+	r.JSONData(iface, InitDashboard())
 	return nil
 }
 
 //JSONData handle http json data
-func (r *Run) JSONData(iface interface{}, dashboard string) {
+func (r *Run) JSONData(iface interface{}, dash *Dashboard) {
+	// dashboard, rows, panels   handle dashboard json
+	// templating, list handle template variables
+	// data options from [templating, list]
+	loopKey := []string{"dashboard", "rows", "panels", "templating", "list", "data"}
 	switch s := iface.(type) {
 	case map[string]interface{}:
-		if _, ok := s["uri"]; ok {
-			r.dashboards <- s["uri"].(string)
+		replacer := strings.NewReplacer(" ", "_", "/", "_", "\\", "_")
+		// handler dashboards
+		if _, ok := s["uri"]; ok && dash.URI == "" {
+			d := InitDashboard()
+			d.URI = s["uri"].(string)
+			d.ID = int64(s["id"].(float64))
+			d.title = replacer.Replace(s["title"].(string))
+			r.dashboards = append(r.dashboards, d)
 		}
 
-		if _, ok := s["dashboard"]; ok {
-			r.JSONData(s["dashboard"], dashboard)
+		for _, key := range loopKey {
+			if _, ok := s[key]; ok {
+				r.JSONData(s[key], dash)
+			}
 		}
 
-		if _, ok := s["rows"]; ok {
-			r.JSONData(s["rows"], dashboard)
-		}
-		if _, ok := s["panels"]; ok {
-			r.JSONData(s["panels"], dashboard)
+		//handler templating map, get label query info
+		label, okLabel := s["label"]
+		query, okQuery := s["query"]
+		if okLabel && okQuery && reflect.ValueOf(label) != reflect.ValueOf(nil) && label.(string) == TemplateVar {
+			//such like label_values(node_disk_reads_completed, instance)
+			dash.TemplateVar = regexp.MustCompile("[(,]").Split(query.(string), -1)[1]
 		}
 
+		//handler panels map, get panel info
 		title, okTitle := s["title"]
 		id, okID := s["id"]
-		if okTitle && okID && dashboard != "" && title.(string) != "" {
-			replacer := strings.NewReplacer(" ", "_", "/", "_", "\\", "_")
+		if okTitle && okID && title.(string) != "" {
 			if r.name == "" || replacer.Replace(r.name) == replacer.Replace(title.(string)) {
-				r.panels <- Panel{
+				dash.Panels = append(dash.Panels, Panel{
 					Title: replacer.Replace(title.(string)),
 					ID:    int64(id.(float64)),
-					URL: fmt.Sprintf("%s/render/dashboard/%s?panelId=%d&from=%d&to=%d&width=%d&height=%d&fullscreen&timeout=%d&tz=%s",
-						r.url, dashboard, int64(s["id"].(float64)), r.from, r.to, r.width, r.height, r.timeout, r.tz),
+				})
+			}
+		}
+		//handler option variables, get host list
+		if _, okInstance := s["instance"]; okInstance {
+			h := s["instance"].(string)
+			if len(dash.Host) == 0 {
+				dash.Host = append(dash.Host, h)
+			}
+			for i, host := range dash.Host {
+				if host == h {
+					break
+				}
+				if i == len(dash.Host)-1 {
+					dash.Host = append(dash.Host, h)
 				}
 			}
-
 		}
 	case []interface{}:
 		for _, sub := range s {
-			r.JSONData(sub, dashboard)
+			r.JSONData(sub, dash)
 		}
 	}
 }
 
-//GetDashboardAPIs http panels
-func (r *Run) GetDashboardAPIs() error {
-	for d := range r.dashboards {
-		iface, err := r.Xget(fmt.Sprintf("%s%s", DashboardAPIPrefix, d))
+//GetDashboardPanels http panels
+func (r *Run) GetDashboardPanels() error {
+	for _, dash := range r.dashboards {
+		// http://192.168.2.188:3000/api/dashboards/db/test-cluster-disk-performance
+		iface, err := r.Xget(fmt.Sprintf("%s%s%s", r.url, DashboardAPIPrefix, dash.URI))
 		if err != nil {
 			return err
 		}
-		r.JSONData(iface, d)
+		r.JSONData(iface, dash)
+
+		if dash.TemplateVar != "" {
+			// http://192.168.2.188:3000/api/datasources/proxy/1/api/v1/series?match[]=node_disk_reads_completed&start=1511935611&end=1511939211
+			ifaceHost, errHost := r.Xget(fmt.Sprintf("%s%s%d%s%s&start=%d&end=%d",
+				r.url, DatasourceProxy, dash.DataSourceID, PrometheusMatchAPI, dash.TemplateVar, r.from, r.to))
+			if errHost != nil {
+				return errHost
+			}
+			r.JSONData(ifaceHost, dash)
+		}
 	}
-	close(r.panels)
 	return nil
 }
 
@@ -168,10 +235,45 @@ func (r *Run) PrefixWork() error {
 	return nil
 }
 
+//GenerateURL generate image url
+func (r *Run) GenerateURL() error {
+	for _, d := range r.dashboards {
+		baseURL := fmt.Sprintf("%s/render/dashboard/%s?from=%d&to=%d&width=%d&height=%d&timeout=%d&tz=%s",
+			r.url, d.URI, r.from, r.to, r.width, r.height, r.timeout, r.tz)
+		if len(d.Panels) < PanelsAllInOnePicturePoint {
+			if len(d.Host) > 1 {
+				for _, h := range d.Host {
+					r.imageURLs <- URL{
+						Title: fmt.Sprintf("%s_%s", d.title, h),
+						URL:   fmt.Sprintf("%s&var-host=%s", baseURL, h),
+					}
+				}
+			} else {
+				r.imageURLs <- URL{
+					Title: d.title,
+					URL:   baseURL,
+				}
+			}
+
+		} else {
+			for _, p := range d.Panels {
+				r.imageURLs <- URL{
+					Title: fmt.Sprintf("%s_%s", d.title, p.Title),
+					URL:   fmt.Sprintf("%s&panelId=%d&fullscreen", baseURL, p.ID),
+				}
+			}
+		}
+	}
+
+	close(r.imageURLs)
+
+	return nil
+}
+
 //GetRenderImages get redner images
 func (r *Run) GetRenderImages() {
-	for p := range r.panels {
-		log.Infof("get %s render image...", p.Title)
+	for p := range r.imageURLs {
+		log.Infof("remain image %d, get %s render image...", len(r.imageURLs), p.Title)
 		data, err := r.XHttp("GET", p.URL, nil)
 		if err != nil {
 			log.Errorf("http get url %s render image error %v", p.URL, err)

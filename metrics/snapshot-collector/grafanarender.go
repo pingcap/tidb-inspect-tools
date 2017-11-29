@@ -11,8 +11,8 @@ import (
 
 type Run struct {
 	client     *http.Client
-	dashboards chan string
-	panels     chan Panel
+	dashboards []*Dashboard
+	imageURLs  chan URL
 	User       string `json:"user"`
 	Password   string `json:"password"`
 	url        string
@@ -57,19 +57,18 @@ func main() {
 	tz, _ := time.Now().Zone()
 
 	r := &Run{
-		client:     c,
-		dashboards: make(chan string, 100),
-		panels:     make(chan Panel, 10000),
-		width:      1980,
-		height:     1080,
-		timeout:    *timeout,
-		from:       ft.UnixNano() / 1000000,
-		to:         et.UnixNano() / 1000000,
-		tz:         tz,
-		name:       strings.Replace(*name, " ", "_", -1),
-		User:       *user,
-		Password:   *password,
-		url:        *addr,
+		client:    c,
+		imageURLs: make(chan URL, 10000),
+		width:     1980,
+		height:    1080,
+		timeout:   *timeout,
+		from:      ft.UnixNano() / 1000000,
+		to:        et.UnixNano() / 1000000,
+		tz:        tz,
+		name:      strings.Replace(*name, " ", "_", -1),
+		User:      *user,
+		Password:  *password,
+		url:       *addr,
 	}
 
 	log.Infof("start...")
@@ -89,8 +88,14 @@ func main() {
 		return
 	}
 	log.Infof("get panels...")
-	if errP := r.GetDashboardAPIs(); errP != nil {
+	if errP := r.GetDashboardPanels(); errP != nil {
 		log.Errorf("get panel error %v", errP)
+		return
+	}
+
+	log.Infof("generate image url...")
+	if errG := r.GenerateURL(); errG != nil {
+		log.Errorf("generate url error %v", errG)
 		return
 	}
 
