@@ -1,14 +1,15 @@
-package main
+package snapshot
 
 import (
 	"flag"
+	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 )
 
+//Run base struct
 type Run struct {
 	client     *http.Client
 	dashboards []*Dashboard
@@ -36,27 +37,25 @@ var (
 	password = flag.String("password", "admin", "input granfana password")
 )
 
-func main() {
+//InitRun init struct
+func InitRun() (*Run, error) {
 	flag.Parse()
 	log.Infof("init..")
 	c, err := NewSession()
 	if err != nil {
-		log.Errorf("create http client with error %v", err)
-		return
+		return nil, errors.Errorf("create http client with error %v", err)
 	}
 	ft, err := time.Parse(TimeFormat, *from)
 	if err != nil {
-		log.Errorf("start time is error %v", err)
-		return
+		return nil, errors.Errorf("start time is error %v", err)
 	}
 	et, err := time.Parse(TimeFormat, *to)
 	if err != nil {
-		log.Errorf("end time is error %v", err)
-		return
+		return nil, errors.Errorf("end time is error %v", err)
 	}
 	tz, _ := time.Now().Zone()
 
-	r := &Run{
+	return &Run{
 		client:    c,
 		imageURLs: make(chan URL, 10000),
 		width:     1980,
@@ -69,45 +68,37 @@ func main() {
 		User:      *user,
 		Password:  *password,
 		url:       *addr,
-	}
+	}, nil
+}
 
-	log.Infof("start...")
-	if errP := r.PrefixWork(); err != nil {
-		log.Errorf("prefix work error %v", errP)
-		return
+//PreData prepare data
+func (r *Run) PreData() error {
+	log.Infof("prepare data start...")
+	if err := r.PrefixWork(); err != nil {
+		return err
 	}
 
 	log.Infof("login grafana...")
-	if errL := r.LoginGrafana(); errL != nil {
-		log.Errorf("log in granfana error %v", errL)
-		return
+	if err := r.LoginGrafana(); err != nil {
+		return err
 	}
 	log.Infof("get dashboards...")
-	if errD := r.GetDashboards(); errD != nil {
-		log.Errorf("get dashboards error %v", errD)
-		return
+	if err := r.GetDashboards(); err != nil {
+		return err
 	}
 	log.Infof("get panels...")
-	if errP := r.GetDashboardPanels(); errP != nil {
-		log.Errorf("get panel error %v", errP)
-		return
+	if err := r.GetDashboardPanels(); err != nil {
+		return err
 	}
 
 	log.Infof("generate image url...")
-	if errG := r.GenerateURL(); errG != nil {
-		log.Errorf("generate url error %v", errG)
-		return
+
+	if err := r.GenerateURL(); err != nil {
+		return err
 	}
 
-	log.Infof("get render images...")
-	var wg sync.WaitGroup
-	for i := 0; i < getCPUNum(); i++ {
-		wg.Add(1)
-		go func() {
-			r.GetRenderImages()
-			wg.Done()
-		}()
-	}
-	wg.Wait()
+	log.Infof("prepare data finished...")
+
+	return nil
 
 }

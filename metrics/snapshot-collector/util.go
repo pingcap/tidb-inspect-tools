@@ -1,4 +1,4 @@
-package main
+package snapshot
 
 import (
 	"bytes"
@@ -20,21 +20,33 @@ import (
 )
 
 const (
-	LoginPath               = "/login"
-	DashboardAPI            = "/api/search?query="
-	DashboardAPIPrefix      = "/api/dashboards/"
-	DashboardDatasource     = "/api/datasources"
-	DatasourceProxy         = "/api/datasources/proxy/"
-	PrometheusMatchAPI      = "/api/v1/series?match[]="
-	CreateHttpClientTimeout = 15
+	//LoginPath grafana login path
+	LoginPath = "/login"
+	//DashboardAPI grafana dashboards
+	DashboardAPI = "/api/search?query="
+	//DashboardAPIPrefix grafana dashboard detail
+	DashboardAPIPrefix = "/api/dashboards/"
+	//DashboardDatasource grafana datasource
+	DashboardDatasource = "/api/datasources"
+	//DatasourceProxy grafana request prometheus proxy
+	DatasourceProxy = "/api/datasources/proxy/"
+	//PrometheusMatchAPI prometheus match api
+	PrometheusMatchAPI = "/api/v1/series?match[]="
+	//CreateHTTPClientTimeout http timeout
+	CreateHTTPClientTimeout = 15
 
-	TemplateVar                = "Host"
+	//TemplateVar panel templating variables
+	TemplateVar = "Host"
+	//PanelsAllInOnePicturePoint delimit one picture informations
 	PanelsAllInOnePicturePoint = 30
 
-	PngDir     = "PngDir"
+	//PngDir save images directory
+	PngDir = "PngDir"
+	//TimeFormat time format
 	TimeFormat = "2006-01-02 15:04:05"
 )
 
+//Dashboard informations
 type Dashboard struct {
 	TemplateVar    string
 	Host           []string
@@ -46,12 +58,14 @@ type Dashboard struct {
 	Panels         []Panel
 }
 
+//Panel informations
 type Panel struct {
 	Title string
 	ID    int64
 	URL   string
 }
 
+//URL redner images struct
 type URL struct {
 	Title string
 	URL   string
@@ -74,7 +88,7 @@ func NewSession() (*http.Client, error) {
 
 	return &http.Client{
 		Jar:     jar,
-		Timeout: time.Second * CreateHttpClientTimeout,
+		Timeout: time.Second * CreateHTTPClientTimeout,
 	}, nil
 }
 
@@ -287,7 +301,7 @@ func (r *Run) SaveImage(title string, data []byte) error {
 	return ioutil.WriteFile(dstImage, data, 0666)
 }
 
-//getCPUNum get cpu number
-func getCPUNum() int {
+//GetCPUNum get cpu number
+func GetCPUNum() int {
 	return runtime.NumCPU()
 }
