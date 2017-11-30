@@ -167,13 +167,12 @@ func (r *Run) JSONData(iface interface{}, dash *Dashboard) {
 		//handler panels map, get panel info
 		title, okTitle := s["title"]
 		id, okID := s["id"]
-		if okTitle && okID && title.(string) != "" {
-			if r.name == "" || replacer.Replace(r.name) == replacer.Replace(title.(string)) {
-				dash.Panels = append(dash.Panels, Panel{
-					Title: replacer.Replace(title.(string)),
-					ID:    int64(id.(float64)),
-				})
-			}
+		if (okTitle && okID && title.(string) != "") &&
+			(r.name == "" || replacer.Replace(r.name) == replacer.Replace(title.(string))) {
+			dash.Panels = append(dash.Panels, Panel{
+				Title: replacer.Replace(title.(string)),
+				ID:    int64(id.(float64)),
+			})
 		}
 		//handler option variables, get host list
 		if _, okInstance := s["instance"]; okInstance {
@@ -240,34 +239,30 @@ func (r *Run) GenerateURL() error {
 	for _, d := range r.dashboards {
 		baseURL := fmt.Sprintf("%s/render/dashboard/%s?from=%d&to=%d&width=%d&height=%d&timeout=%d&tz=%s",
 			r.url, d.URI, r.from, r.to, r.width, r.height, r.timeout, r.tz)
-		if len(d.Panels) < PanelsAllInOnePicturePoint {
-			if len(d.Host) > 1 {
-				for _, h := range d.Host {
-					r.imageURLs <- URL{
-						Title: fmt.Sprintf("%s_%s", d.title, h),
-						URL:   fmt.Sprintf("%s&var-host=%s", baseURL, h),
-					}
-				}
-			} else {
-				r.imageURLs <- URL{
-					Title: d.title,
-					URL:   baseURL,
-				}
+		// all of panels less than PanelsAllInOnePicturePoint, generate one picture
+		if len(d.Panels) < PanelsAllInOnePicturePoint && len(d.Host) > 1 {
+			for _, h := range d.Host {
+				r.AddImageURL(fmt.Sprintf("%s_%s", d.title, h), fmt.Sprintf("%s&var-host=%s", baseURL, h))
 			}
-
+		} else if len(d.Panels) < PanelsAllInOnePicturePoint {
+			r.AddImageURL(d.title, baseURL)
 		} else {
 			for _, p := range d.Panels {
-				r.imageURLs <- URL{
-					Title: fmt.Sprintf("%s_%s", d.title, p.Title),
-					URL:   fmt.Sprintf("%s&panelId=%d&fullscreen", baseURL, p.ID),
-				}
+				r.AddImageURL(fmt.Sprintf("%s_%s", d.title, p.Title), fmt.Sprintf("%s&panelId=%d&fullscreen", baseURL, p.ID))
 			}
 		}
 	}
-
 	close(r.imageURLs)
-
 	return nil
+}
+
+//AddImageURL add url
+func (r *Run) AddImageURL(title string, url string) {
+	r.imageURLs <- URL{
+		Title: title,
+		URL:   url,
+	}
+
 }
 
 //GetRenderImages get redner images
