@@ -93,7 +93,9 @@ func (r *Run) PreData() error {
 	}
 	if r.requestRenderURL != "" {
 		log.Infof("handle url %s ..", r.requestRenderURL)
-		return r.HandlerRequestURL()
+		err := r.HandlerRequestURL()
+		close(r.imageURLs)
+		return err
 	}
 	log.Infof("get dashboards...")
 	if err := r.GetDashboards(); err != nil {
@@ -110,6 +112,7 @@ func (r *Run) PreData() error {
 		return err
 	}
 
+	close(r.imageURLs)
 	log.Infof("prepare data finished...")
 
 	return nil
