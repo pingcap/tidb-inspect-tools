@@ -17,6 +17,7 @@ func main() {
 		return
 	}
 	var wg sync.WaitGroup
+	close(r.imageURLs)
 	for i := 0; i < sc.GetCPUNum(); i++ {
 		wg.Add(1)
 		go func() {
