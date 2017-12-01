@@ -144,7 +144,9 @@ func (r *Run) HandlerRequestURL() error {
 	}
 	uPath := strings.Split(u.Path, "/")
 	u.Path = fmt.Sprintf("/render%s", u.Path)
-	return r.AddImageURL(fmt.Sprintf("%s_%d", uPath[len(uPath)-1], time.Now().UnixNano()), u.String())
+	errA := r.AddImageURL(fmt.Sprintf("%s_%d", uPath[len(uPath)-1], time.Now().UnixNano()), u.String())
+	close(r.imageURLs)
+	return errA
 }
 
 //GetDashboards http get dashboards
