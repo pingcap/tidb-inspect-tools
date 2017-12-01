@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -135,6 +136,17 @@ func (r *Run) Xget(url string) (interface{}, error) {
 
 }
 
+//HandlerRequestURL handler offer URL to render
+func (r *Run) HandlerRequestURL() error {
+	u, err := url.Parse(r.requestRenderURL)
+	if err != nil {
+		return err
+	}
+	uPath := strings.Split(u.Path, "/")
+	u.Path = fmt.Sprintf("/render%s", u.Path)
+	return r.AddImageURL(fmt.Sprintf("%s_%d", uPath[len(uPath)-1], time.Now().UnixNano()), u.String())
+}
+
 //GetDashboards http get dashboards
 func (r *Run) GetDashboards() error {
 	// http://192.168.2.188:3000/api/search?query=
@@ -154,13 +166,12 @@ func (r *Run) JSONData(iface interface{}, dash *Dashboard) {
 	loopKey := []string{"dashboard", "rows", "panels", "templating", "list", "data"}
 	switch s := iface.(type) {
 	case map[string]interface{}:
-		replacer := strings.NewReplacer(" ", "_", "/", "_", "\\", "_")
 		// handler dashboards
 		if _, ok := s["uri"]; ok && dash.URI == "" {
 			d := InitDashboard()
 			d.URI = s["uri"].(string)
 			d.ID = int64(s["id"].(float64))
-			d.title = replacer.Replace(s["title"].(string))
+			d.title = stringReplacer.Replace(s["title"].(string))
 			r.dashboards = append(r.dashboards, d)
 		}
 
@@ -182,9 +193,9 @@ func (r *Run) JSONData(iface interface{}, dash *Dashboard) {
 		title, okTitle := s["title"]
 		id, okID := s["id"]
 		if (okTitle && okID && title.(string) != "") &&
-			(r.name == "" || replacer.Replace(r.name) == replacer.Replace(title.(string))) {
+			(r.name == "" || stringReplacer.Replace(r.name) == stringReplacer.Replace(title.(string))) {
 			dash.Panels = append(dash.Panels, Panel{
-				Title: replacer.Replace(title.(string)),
+				Title: stringReplacer.Replace(title.(string)),
 				ID:    int64(id.(float64)),
 			})
 		}
@@ -213,6 +224,9 @@ func (r *Run) JSONData(iface interface{}, dash *Dashboard) {
 //GetDashboardPanels http panels
 func (r *Run) GetDashboardPanels() error {
 	for _, dash := range r.dashboards {
+		if r.requestDashboard != "" && r.requestDashboard != dash.title {
+			continue
+		}
 		// http://192.168.2.188:3000/api/dashboards/db/test-cluster-disk-performance
 		iface, err := r.Xget(fmt.Sprintf("%s%s%s", r.url, DashboardAPIPrefix, dash.URI))
 		if err != nil {
@@ -244,7 +258,6 @@ func (r *Run) PrefixWork() error {
 	if _, err := os.Stat(r.pngDir); os.IsNotExist(err) {
 		return os.Mkdir(r.pngDir, 0774)
 	}
-
 	return nil
 }
 
@@ -271,12 +284,12 @@ func (r *Run) GenerateURL() error {
 }
 
 //AddImageURL add url
-func (r *Run) AddImageURL(title string, url string) {
+func (r *Run) AddImageURL(title string, url string) error {
 	r.imageURLs <- URL{
 		Title: title,
 		URL:   url,
 	}
-
+	return nil
 }
 
 //GetRenderImages get redner images
