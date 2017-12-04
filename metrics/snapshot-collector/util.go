@@ -1,4 +1,4 @@
-package main
+package snapshot
 
 import (
 	"bytes"
@@ -10,27 +10,74 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
 )
 
 const (
-	LoginPath               = "/login"
-	DashboardAPI            = "/api/search?query="
-	DashboardAPIPrefix      = "/api/dashboards/"
-	CreateHttpClientTimeout = 15
+	//LoginPath grafana login path
+	LoginPath = "/login"
+	//DashboardAPI grafana dashboards
+	DashboardAPI = "/api/search?query="
+	//DashboardAPIPrefix grafana dashboard detail
+	DashboardAPIPrefix = "/api/dashboards/"
+	//DashboardDatasource grafana datasource
+	DashboardDatasource = "/api/datasources"
+	//DatasourceProxy grafana request prometheus proxy
+	DatasourceProxy = "/api/datasources/proxy/"
+	//PrometheusMatchAPI prometheus match api
+	PrometheusMatchAPI = "/api/v1/series?match[]="
+	//CreateHTTPClientTimeout http timeout
+	CreateHTTPClientTimeout = 15
 
-	PngDir     = "PngDir"
+	//TemplateVar panel templating variables
+	TemplateVar = "Host"
+	//PanelsAllInOnePicturePoint delimit one picture informations
+	PanelsAllInOnePicturePoint = 30
+
+	//PngDir save images directory
+	PngDir = "PngDir"
+	//TimeFormat time format
 	TimeFormat = "2006-01-02 15:04:05"
 )
 
+//Dashboard informations
+type Dashboard struct {
+	TemplateVar    string
+	Host           []string
+	URI            string
+	title          string
+	ID             int64
+	DataSourceID   int64
+	DataSourceType string
+	Panels         []Panel
+}
+
+//Panel informations
 type Panel struct {
 	Title string
 	ID    int64
 	URL   string
+}
+
+//URL redner images struct
+type URL struct {
+	Title string
+	URL   string
+}
+
+//InitDashboard init struct
+func InitDashboard() *Dashboard {
+	return &Dashboard{
+		DataSourceType: "prometheus",
+		DataSourceID:   1,
+	}
 }
 
 //NewSession crate http client
@@ -42,7 +89,7 @@ func NewSession() (*http.Client, error) {
 
 	return &http.Client{
 		Jar:     jar,
-		Timeout: time.Second * CreateHttpClientTimeout,
+		Timeout: time.Second * CreateHTTPClientTimeout,
 	}, nil
 }
 
@@ -74,12 +121,12 @@ func (r *Run) XHttp(method string, url string, body io.Reader) ([]byte, error) {
 			return ioutil.ReadAll(resp.Body)
 		}
 	}
-	return nil, errors.Errorf("can not post data to url %s", url)
+	return nil, errors.Errorf("can not request url %s", url)
 }
 
 //Xget http get
-func (r *Run) Xget(urlParams string) (interface{}, error) {
-	d, err := r.XHttp("GET", fmt.Sprintf("%s%s", r.url, urlParams), nil)
+func (r *Run) Xget(url string) (interface{}, error) {
+	d, err := r.XHttp("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -89,67 +136,117 @@ func (r *Run) Xget(urlParams string) (interface{}, error) {
 
 }
 
-//GetDashboards http get dashboards
-func (r *Run) GetDashboards() error {
-	iface, err := r.Xget(DashboardAPI)
+//HandlerRequestURL handler offer URL to render
+func (r *Run) HandlerRequestURL() error {
+	u, err := url.Parse(r.requestRenderURL)
 	if err != nil {
 		return err
 	}
-	r.JSONData(iface, "")
-	close(r.dashboards)
+	if r.url == "" {
+		r.url = fmt.Sprintf("%s://%s", u.Scheme, u.Host)
+	}
+	uPath := strings.Split(u.Path, "/")
+	u.Path = fmt.Sprintf("/render%s", u.Path)
+	return r.AddImageURL(fmt.Sprintf("%s_%d", uPath[len(uPath)-1], time.Now().UnixNano()), u.String())
+}
+
+//GetDashboards http get dashboards
+func (r *Run) GetDashboards() error {
+	// http://192.168.2.188:3000/api/search?query=
+	iface, err := r.Xget(fmt.Sprintf("%s%s", r.url, DashboardAPI))
+	if err != nil {
+		return err
+	}
+	r.JSONData(iface, InitDashboard())
 	return nil
 }
 
 //JSONData handle http json data
-func (r *Run) JSONData(iface interface{}, dashboard string) {
+func (r *Run) JSONData(iface interface{}, dash *Dashboard) {
+	// dashboard, rows, panels   handle dashboard json
+	// templating, list handle template variables
+	// data options from [templating, list]
+	loopKey := []string{"dashboard", "rows", "panels", "templating", "list", "data"}
 	switch s := iface.(type) {
 	case map[string]interface{}:
-		if _, ok := s["uri"]; ok {
-			r.dashboards <- s["uri"].(string)
+		// handler dashboards
+		if _, ok := s["uri"]; ok && dash.URI == "" {
+			d := InitDashboard()
+			d.URI = s["uri"].(string)
+			d.ID = int64(s["id"].(float64))
+			d.title = stringReplacer.Replace(s["title"].(string))
+			r.dashboards = append(r.dashboards, d)
 		}
 
-		if _, ok := s["dashboard"]; ok {
-			r.JSONData(s["dashboard"], dashboard)
+		for _, key := range loopKey {
+			if _, ok := s[key]; ok {
+				r.JSONData(s[key], dash)
+			}
 		}
 
-		if _, ok := s["rows"]; ok {
-			r.JSONData(s["rows"], dashboard)
-		}
-		if _, ok := s["panels"]; ok {
-			r.JSONData(s["panels"], dashboard)
+		//handler templating map, get label query info
+		label, okLabel := s["label"]
+		query, okQuery := s["query"]
+		if okLabel && okQuery && reflect.ValueOf(label) != reflect.ValueOf(nil) && label.(string) == TemplateVar {
+			//such like label_values(node_disk_reads_completed, instance)
+			dash.TemplateVar = regexp.MustCompile("[(,]").Split(query.(string), -1)[1]
 		}
 
+		//handler panels map, get panel info
 		title, okTitle := s["title"]
 		id, okID := s["id"]
-		if okTitle && okID && dashboard != "" && title.(string) != "" {
-			replacer := strings.NewReplacer(" ", "_", "/", "_", "\\", "_")
-			if r.name == "" || replacer.Replace(r.name) == replacer.Replace(title.(string)) {
-				r.panels <- Panel{
-					Title: replacer.Replace(title.(string)),
-					ID:    int64(id.(float64)),
-					URL: fmt.Sprintf("%s/render/dashboard/%s?panelId=%d&from=%d&to=%d&width=%d&height=%d&fullscreen&timeout=%d&tz=%s",
-						r.url, dashboard, int64(s["id"].(float64)), r.from, r.to, r.width, r.height, r.timeout, r.tz),
+		if (okTitle && okID && title.(string) != "") &&
+			(r.name == "" || stringReplacer.Replace(r.name) == stringReplacer.Replace(title.(string))) {
+			dash.Panels = append(dash.Panels, Panel{
+				Title: stringReplacer.Replace(title.(string)),
+				ID:    int64(id.(float64)),
+			})
+		}
+		//handler option variables, get host list
+		if _, okInstance := s["instance"]; okInstance {
+			h := s["instance"].(string)
+			if len(dash.Host) == 0 {
+				dash.Host = append(dash.Host, h)
+			}
+			for i, host := range dash.Host {
+				if host == h {
+					break
+				}
+				if i == len(dash.Host)-1 {
+					dash.Host = append(dash.Host, h)
 				}
 			}
-
 		}
 	case []interface{}:
 		for _, sub := range s {
-			r.JSONData(sub, dashboard)
+			r.JSONData(sub, dash)
 		}
 	}
 }
 
-//GetDashboardAPIs http panels
-func (r *Run) GetDashboardAPIs() error {
-	for d := range r.dashboards {
-		iface, err := r.Xget(fmt.Sprintf("%s%s", DashboardAPIPrefix, d))
+//GetDashboardPanels http panels
+func (r *Run) GetDashboardPanels() error {
+	for _, dash := range r.dashboards {
+		if r.requestDashboard != "" && r.requestDashboard != dash.title {
+			continue
+		}
+		// http://192.168.2.188:3000/api/dashboards/db/test-cluster-disk-performance
+		iface, err := r.Xget(fmt.Sprintf("%s%s%s", r.url, DashboardAPIPrefix, dash.URI))
 		if err != nil {
 			return err
 		}
-		r.JSONData(iface, d)
+		r.JSONData(iface, dash)
+
+		if dash.TemplateVar != "" {
+			// http://192.168.2.188:3000/api/datasources/proxy/1/api/v1/series?match[]=node_disk_reads_completed&start=1511935611&end=1511939211
+			ifaceHost, errHost := r.Xget(fmt.Sprintf("%s%s%d%s%s&start=%d&end=%d",
+				r.url, DatasourceProxy, dash.DataSourceID, PrometheusMatchAPI, dash.TemplateVar, r.from, r.to))
+			if errHost != nil {
+				return errHost
+			}
+			r.JSONData(ifaceHost, dash)
+		}
 	}
-	close(r.panels)
 	return nil
 }
 
@@ -164,14 +261,43 @@ func (r *Run) PrefixWork() error {
 	if _, err := os.Stat(r.pngDir); os.IsNotExist(err) {
 		return os.Mkdir(r.pngDir, 0774)
 	}
+	return nil
+}
 
+//GenerateURL generate image url
+func (r *Run) GenerateURL() error {
+	for _, d := range r.dashboards {
+		baseURL := fmt.Sprintf("%s/render/dashboard/%s?from=%d&to=%d&width=%d&height=%d&timeout=%d&tz=%s",
+			r.url, d.URI, r.from, r.to, r.width, r.height, r.timeout, r.tz)
+		// all of panels less than PanelsAllInOnePicturePoint, generate one picture
+		if len(d.Panels) < PanelsAllInOnePicturePoint && len(d.Host) > 1 {
+			for _, h := range d.Host {
+				r.AddImageURL(fmt.Sprintf("%s_%s", d.title, h), fmt.Sprintf("%s&var-host=%s", baseURL, h))
+			}
+		} else if len(d.Panels) < PanelsAllInOnePicturePoint {
+			r.AddImageURL(d.title, baseURL)
+		} else {
+			for _, p := range d.Panels {
+				r.AddImageURL(fmt.Sprintf("%s_%s", d.title, p.Title), fmt.Sprintf("%s&panelId=%d&fullscreen", baseURL, p.ID))
+			}
+		}
+	}
+	return nil
+}
+
+//AddImageURL add url
+func (r *Run) AddImageURL(title string, url string) error {
+	r.imageURLs <- URL{
+		Title: title,
+		URL:   url,
+	}
 	return nil
 }
 
 //GetRenderImages get redner images
 func (r *Run) GetRenderImages() {
-	for p := range r.panels {
-		log.Infof("get %s render image...", p.Title)
+	for p := range r.imageURLs {
+		log.Infof("remain image %d, get %s render image...", len(r.imageURLs), p.Title)
 		data, err := r.XHttp("GET", p.URL, nil)
 		if err != nil {
 			log.Errorf("http get url %s render image error %v", p.URL, err)
@@ -190,7 +316,7 @@ func (r *Run) SaveImage(title string, data []byte) error {
 	return ioutil.WriteFile(dstImage, data, 0666)
 }
 
-//getCPUNum get cpu number
-func getCPUNum() int {
+//GetCPUNum get cpu number
+func GetCPUNum() int {
 	return runtime.NumCPU()
 }
