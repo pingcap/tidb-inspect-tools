@@ -87,13 +87,15 @@ func (r *Run) PreData() error {
 		return err
 	}
 
-	log.Infof("login grafana...")
-	if err := r.LoginGrafana(); err != nil {
-		return err
-	}
 	if r.requestRenderURL != "" {
-		log.Infof("handle url %s ..", r.requestRenderURL)
-		err := r.HandlerRequestURL()
+		log.Infof("handler render url...")
+		if err := r.HandlerRequestURL(); err != nil {
+			return err
+		}
+	}
+
+	log.Infof("login grafana...")
+	if err := r.LoginGrafana(); err != nil || len(r.imageURLs) > 0 {
 		close(r.imageURLs)
 		return err
 	}
@@ -107,7 +109,6 @@ func (r *Run) PreData() error {
 	}
 
 	log.Infof("generate image url...")
-
 	if err := r.GenerateURL(); err != nil {
 		return err
 	}
