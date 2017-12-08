@@ -16,7 +16,7 @@ default: snapshot-collector
 all: check test snapshot-collector
 
 snapshot-collector:
-	$(GOBUILD) -o bin/snapshot-collector cmd/snapshot-collector/snapshot-collector.go
+	$(GOBUILD) -o bin/snapshot-collector *.go
 
 test:
 	$(GOTEST) --race $(PACKAGES)

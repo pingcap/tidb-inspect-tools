@@ -2,12 +2,11 @@ package main
 
 import (
 	"github.com/ngaut/log"
-	sc "github.com/pingcap/tidb-inspector-tools/metrics/snapshot-collector"
 	"sync"
 )
 
 func main() {
-	r, err := sc.InitRun()
+	r, err := InitRun()
 	if err != nil {
 		log.Errorf("can not init,error %v", err)
 		return
@@ -17,7 +16,7 @@ func main() {
 		return
 	}
 	var wg sync.WaitGroup
-	for i := 0; i < sc.GetCPUNum(); i++ {
+	for i := 0; i < GetCPUNum(); i++ {
 		wg.Add(1)
 		go func() {
 			r.GetRenderImages()
