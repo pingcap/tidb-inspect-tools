@@ -1,6 +1,10 @@
 snapshot-collector
 ------
 **This directory for capture Grafana's URLs to genertate images**
+### Attentions
+- **make sure grafana server have  shared object file `libfontconfig.so.1`**
+- debian/ubuntu:  `apt-get install -y libfontconfig freetype-devel fontconfig-devel fontconfig`
+- centos: `yum install -y fontconfig freetype freetype-devel fontconfig-devel libstdc++`
 
 ### Build it
 - install Golang
@@ -42,6 +46,3 @@ Usage of ./bin/snapshot-collector:
 - collector one panel with name
 	- `./snapshot-collector -address "http://192.168.2.188:3000"  -user "admin" -password="admin" -name "Disk Latency"`
 	
-### Attentions
-- **make sure grafana server have  shared object file `libfontconfig.so.1`**
-- deb package is `libfontconfig1`
