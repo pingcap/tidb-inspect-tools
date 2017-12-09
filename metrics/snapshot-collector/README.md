@@ -1,4 +1,4 @@
-snapshot-collector
+metrics-snapshot-collector
 ------
 **This tool is used to capture screenshots of grafana**
 ### Notice
@@ -6,15 +6,15 @@ snapshot-collector
 - debian/ubuntu:  `apt-get install -y libfontconfig freetype-devel fontconfig-devel fontconfig`
 - centos: `yum install -y fontconfig freetype freetype-devel fontconfig-devel libstdc++`
 
-### Build it
+### Build
 - install Golang(1.8.3+)
 - `make`
 
-**The compilie file is bin/snapshot-collector**
+**The target executable binary file is bin/metrics-snapshot-collector**
 
-### Parameters
+### Usages
 ```
-Usage of ./bin/snapshot-collector:
+Usage of ./bin/metrics-snapshot-collector:
   -address string
     	input grafana address (default "http://192.168.2.188:3000")
   -dashboard string
@@ -24,7 +24,7 @@ Usage of ./bin/snapshot-collector:
   -name string
     	input panel name
   -password string
-    	input granfana password (default "admin")
+    	input grafana password (default "admin")
   -renderurl string
     	input render url
   -start string
@@ -38,11 +38,11 @@ Usage of ./bin/snapshot-collector:
 
 ### Examples:
 - collect all of panels
-	- `./snapshot-collector -address "http://192.168.2.188:3000" -user "admin" -password="admin" -start "2017-12-01 10:20:34" -end "2017-12-04 10:20:34"`
+	- `./metrics-snapshot-collector -address "http://192.168.2.188:3000" -user "admin" -password="admin" -start "2017-12-01 10:20:34" -end "2017-12-04 10:20:34"`
 - collect all of the `Test-Cluster-TiKV` dashboard's panels
 	- `./snapshot-collector -address "http://192.168.2.188:3000"  -user "admin" -password="admin" -dashboard "Test-Cluster-TiKV"`
-- collect one panel with URL
-	- `./snapshot-collector  -user "admin" -password="admin" -renderurl "http://192.168.2.188:3000/dashboard/db/test-cluster-disk-performance?panelId=11&fullscreen&orgId=1"`
-- collect one panel with name
-	- `./snapshot-collector -address "http://192.168.2.188:3000"  -user "admin" -password="admin" -name "Disk Latency"`
+- collect one panel by URL
+	- `./metrics-snapshot-collector  -user "admin" -password="admin" -renderurl "http://192.168.2.188:3000/dashboard/db/test-cluster-disk-performance?panelId=11&fullscreen&orgId=1"`
+- collect one panel by name
+	- `./metrics-snapshot-collector -address "http://192.168.2.188:3000"  -user "admin" -password="admin" -name "Disk Latency"`
 	
