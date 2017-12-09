@@ -3,8 +3,8 @@ snapshot-collector
 **This directory for capture Grafana's URLs to genertate images**
 ### Attentions
 - **make sure grafana server have  shared object file `libfontconfig.so.1`**
-- debian/ubuntu:  `apt-get install -y libfontconfig freetype-devel fontconfig-devel fontconfig`
-- centos: `yum install -y fontconfig freetype freetype-devel fontconfig-devel libstdc++`
+	- debian/ubuntu:  `apt-get install -y libfontconfig freetype-devel fontconfig-devel fontconfig`
+	- centos: `yum install -y fontconfig freetype freetype-devel fontconfig-devel libstdc++`
 
 ### Build it
 - install Golang
