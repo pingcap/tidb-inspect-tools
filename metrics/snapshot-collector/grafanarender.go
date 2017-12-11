@@ -35,7 +35,7 @@ var (
 	from      = flag.String("start", time.Now().AddDate(0, 0, -3).Format(TimeFormat), "input start time, default is 3 days ago")
 	to        = flag.String("end", time.Now().Format(TimeFormat), "input end time,default is now")
 	name      = flag.String("name", "", "input panel name")
-	timeout   = flag.Int64("timeout", 30, "input execute query timeout")
+	timeout   = flag.Int64("timeout", 60, "input execute query timeout")
 	user      = flag.String("user", "admin", "input granfana user")
 	password  = flag.String("password", "admin", "input granfana password")
 	dashboard = flag.String("dashboard", "", "input dashboard name")

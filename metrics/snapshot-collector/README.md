@@ -1,10 +1,13 @@
 metrics-snapshot-collector
 ------
+
 **This tool is used to capture screenshots of grafana**
 ### Notice
 - **Ensure grafana server have shared object file `libfontconfig.so.1`**
-- debian/ubuntu:  `apt-get install -y libfontconfig freetype-devel fontconfig-devel fontconfig`
-- centos: `yum install -y fontconfig freetype freetype-devel fontconfig-devel libstdc++`
+- debian/ubuntu:  
+	- `apt-get install -y libfontconfig freetype-devel fontconfig-devel fontconfig`
+- centos: 
+	- `yum install -y fontconfig freetype freetype-devel fontconfig-devel libstdc++`
 
 ### Build
 - install Golang(1.8.3+)
@@ -16,23 +19,23 @@ metrics-snapshot-collector
 ```
 Usage of ./bin/metrics-snapshot-collector:
   -address string
-    	input grafana address (default "http://192.168.2.188:3000")
+    	grafana address (default "http://192.168.2.188:3000")
   -dashboard string
-    	input dashboard name
+    	dashboard name
   -end string
-    	input end time,default is now (default "2017-12-04 10:20:34")
+    	end time,default is now (default "2017-12-04 10:20:34")
   -name string
-    	input panel name
+    	panel name
   -password string
-    	input grafana password (default "admin")
+    	grafana password (default "admin")
   -renderurl string
-    	input render url
+    	render url
   -start string
-    	input start time, default is 3 days ago (default "2017-12-01 10:20:34")
+    	start time, default is 3 days ago (default "2017-12-01 10:20:34")
   -timeout int
-    	input execute query timeout[second] (default 60)
+    	execute query timeout[second] (default 60)
   -user string
-    	input grafana user (default "admin")
+    	grafana user (default "admin")
 ```
 
 
