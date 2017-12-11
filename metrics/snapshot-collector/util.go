@@ -142,9 +142,7 @@ func (r *Run) HandlerRequestURL() error {
 	if err != nil {
 		return err
 	}
-	if r.url == "" {
-		r.url = fmt.Sprintf("%s://%s", u.Scheme, u.Host)
-	}
+	r.url = fmt.Sprintf("%s://%s", u.Scheme, u.Host)
 	uPath := strings.Split(u.Path, "/")
 	u.Path = fmt.Sprintf("/render%s", u.Path)
 	return r.AddImageURL(fmt.Sprintf("%s_%d", uPath[len(uPath)-1], time.Now().UnixNano()), u.String())
