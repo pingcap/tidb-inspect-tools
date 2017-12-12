@@ -2,12 +2,21 @@ metrics-snapshot-collector
 ------
 
 **This tool is used to capture screenshots of grafana**
-### Notice
-- **Ensure grafana server have shared object file `libfontconfig.so.1`**
+### Preparation
+- **Make sure grafana server has shared object file `libfontconfig.so.1`**
 - debian/ubuntu:  
 	- `apt-get install -y libfontconfig freetype-devel fontconfig-devel fontconfig`
 - centos: 
 	- `yum install -y fontconfig freetype freetype-devel fontconfig-devel libstdc++`
+- **Make sure grafana server has fonts installed for English**
+- to list the fonts support English: 
+	- `fc-list :lang=en`
+- if the output is empty, you will need to install at least one font that supports English, here is an example of install Google Fonts on Linux servers: 
+	- `cd` 
+	- `sudo wget https://github.com/google/fonts/archive/master.zip` 
+	- `unzip master.zip` 
+	- `sudo cp -rvf fonts-master /usr/share/fonts` 
+	- `fc-cache -fv`
 
 ### Build
 - install Golang(1.8.3+)
