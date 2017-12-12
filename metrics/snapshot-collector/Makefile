@@ -11,12 +11,12 @@ LDFLAGS += -X "github.com/pingcap/tidb-inspector-tools/util.GitHash=$(shell git 
 
 GOBUILD=$(GO) build -ldflags '$(LDFLAGS)'
 
-default: snapshot-collector
+default: metrics-snapshot-collector
 
-all: check test snapshot-collector
+all: check test metrics-snapshot-collector
 
-snapshot-collector:
-	$(GOBUILD) -o bin/snapshot-collector *.go
+metrics-snapshot-collector:
+	$(GOBUILD) -o bin/metrics-snapshot-collector *.go
 
 test:
 	$(GOTEST) --race $(PACKAGES)
@@ -35,4 +35,4 @@ check:
 clean:
 	@rm -rf bin/*
 
-.PHONY: all test clean tidb-inspector-tools
+.PHONY: all test clean metrics-snapshot-collector
