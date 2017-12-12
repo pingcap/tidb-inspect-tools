@@ -17,6 +17,8 @@ metrics-snapshot-collector
 	- `unzip master.zip` 
 	- `sudo cp -rvf fonts-master /usr/share/fonts` 
 	- `fc-cache -fv`
+- centos: 
+	- `sudo yum install -y open-sans-fonts`
 
 ### Build
 - install Golang(1.8.3+)
