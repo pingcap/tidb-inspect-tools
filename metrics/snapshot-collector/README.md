@@ -13,9 +13,9 @@ metrics-snapshot-collector
 	- `fc-list :lang=en`
 - if the output is empty, you will need to install at least one font that supports English, here is an example of install Google Fonts on Linux servers: 
 	- `cd` 
-	- `sudo wget https://github.com/google/fonts/archive/master.zip` 
-	- `unzip master.zip` 
-	- `sudo cp -rvf fonts-master /usr/share/fonts` 
+	- `wget -O Open_Sans.zip  https://fonts.google.com/download?family=Open%20Sans` 
+	- `unzip -d Open_Sans Open_Sans.zip` 
+	- `sudo cp -rvf Open_Sans /usr/share/fonts` 
 	- `fc-cache -fv`
 - centos: 
 	- `sudo yum install -y open-sans-fonts`
