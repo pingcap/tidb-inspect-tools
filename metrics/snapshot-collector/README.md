@@ -16,7 +16,7 @@ metrics-snapshot-collector
 	- `wget -O Open_Sans.zip  https://fonts.google.com/download?family=Open%20Sans` 
 	- `unzip -d Open_Sans Open_Sans.zip` 
 	- `sudo cp -rvf Open_Sans /usr/share/fonts` 
-	- `fc-cache -fv`
+	- `sudo fc-cache -fv`
 - centos: 
 	- `sudo yum install -y open-sans-fonts`
 
