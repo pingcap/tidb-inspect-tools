@@ -51,9 +51,9 @@ Usage of ./bin/metrics-snapshot-collector:
 
 
 ### Examples:
-- collect all of panels
+- collect all panels
 	- `./metrics-snapshot-collector -address "http://192.168.2.188:3000" -user "admin" -password="admin" -start "2017-12-01 10:20:34" -end "2017-12-04 10:20:34"`
-- collect all of the `Test-Cluster-TiKV` dashboard's panels
+- collect all panels of the `Test-Cluster-TiKV` dashboard
 	- `./snapshot-collector -address "http://192.168.2.188:3000"  -user "admin" -password="admin" -dashboard "Test-Cluster-TiKV"`
 - collect one panel by URL
 	- `./metrics-snapshot-collector  -user "admin" -password="admin" -renderurl "http://192.168.2.188:3000/dashboard/db/test-cluster-disk-performance?panelId=11&fullscreen&orgId=1"`
