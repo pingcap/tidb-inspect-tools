@@ -24,7 +24,7 @@ var (
 	port          = flag.Int("port", 4000, "tidb port")
 	user          = flag.String("user", "root", "tidb user")
 	password      = flag.String("password", "", "tidb password")
-	metrics       = flag.String("metrics", "", "pushgateway address")
+	metrics       = flag.String("metrics", "", "metrics address")
 	querytimeout  = flag.Int("query-timeout", 30, "execute query timeout")
 	suffixCommand = flag.String("suffix-command", "", "when check tidb failed and run shell command")
 
@@ -125,7 +125,7 @@ func main() {
 			log.Errorf("report prometheus error : %v", err)
 		}
 	}
-	if *suffixCommand != "" {
+	if *suffixCommand != "" && !tidbFunctioning {
 		if exitCode, cmdOut, errCMD := runSuffixCommand(*suffixCommand); errCMD != nil || exitCode != 0 {
 			log.Errorf("execute command error,exitCode %d error information %v", exitCode, cmdOut)
 		}
