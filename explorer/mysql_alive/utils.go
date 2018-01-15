@@ -2,9 +2,18 @@ package main
 
 import (
 	log "github.com/sirupsen/logrus"
+	"os"
 	"os/exec"
 	"syscall"
 )
+
+func getHostName() string {
+	instance, err := os.Hostname()
+	if err != nil {
+		instance = "Unknowhost"
+	}
+	return instance
+}
 
 func runSuffixCommand(command string) (int, string, error) {
 	cmd := exec.Command("/bin/bash", "-c", command)

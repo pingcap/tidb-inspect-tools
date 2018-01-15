@@ -82,13 +82,14 @@ func doTest() bool {
 
 func scheduler() {
 	tk := time.NewTicker(time.Duration(*interval) * time.Second)
+	instance := getHostName()
 
 	for {
 		select {
 		case <-tk.C:
 			tidbFunctioning := doTest()
 			if *metrics != "" {
-				if err := reportProm(); err != nil {
+				if err := reportProm(instance); err != nil {
 					log.Errorf("report prometheus error : %v", err)
 				}
 			}

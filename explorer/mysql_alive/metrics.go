@@ -15,10 +15,10 @@ var (
 		}, []string{"status"})
 )
 
-func reportProm() error {
+func reportProm(instance string) error {
 	return push.AddFromGatherer(
 		"tools",
-		map[string]string{"instance": *host},
+		map[string]string{"instance": instance},
 		*metrics,
 		prometheus.DefaultGatherer,
 	)
