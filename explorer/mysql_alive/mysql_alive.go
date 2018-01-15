@@ -5,11 +5,10 @@ import (
 	"flag"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/push"
 	log "github.com/sirupsen/logrus"
 	"os"
-	"os/exec"
+	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -27,15 +26,7 @@ var (
 	metrics       = flag.String("metrics", "", "metrics address")
 	querytimeout  = flag.Int("query-timeout", 30, "execute query timeout")
 	suffixCommand = flag.String("suffix-command", "", "when check tidb failed and run shell command")
-
-	tidbFunctioning bool
-	checkAlive      = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "tools",
-			Subsystem: "tidb",
-			Name:      "check_alive",
-			Help:      "check tidb is alive.",
-		}, []string{"status"})
+	interval      = flag.Int64("interval", 180, "check alive interval")
 )
 
 func checkParams() error {
@@ -73,35 +64,46 @@ func mysqlTest() error {
 	return nil
 }
 
-func reportProm(tf bool) error {
-	instance, err := os.Hostname()
-	if err != nil {
-		instance = "Unknow_host"
+func doTest() bool {
+	var err error
+	for i := 0; i < 3; i++ {
+		err = mysqlTest()
+		if err == nil {
+			checkAlive.WithLabelValues("success").Inc()
+			return true
+		}
+		log.Errorf("check %d mysql failed, error : %v", i, err)
+		time.Sleep(time.Second)
 	}
-	prometheus.MustRegister(checkAlive)
-	if !tf {
-		checkAlive.WithLabelValues("fail").Inc()
-	} else {
-		checkAlive.WithLabelValues("success").Inc()
-	}
-	return push.AddFromGatherer(
-		"tools",
-		map[string]string{"instance": instance},
-		*metrics,
-		prometheus.DefaultGatherer,
-	)
+	checkAlive.WithLabelValues("fail").Inc()
+	return false
+
 }
 
-func runSuffixCommand(command string) (int, string, error) {
-	cmd := exec.Command("/bin/bash", "-c", command)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Errorf("exec command %s, output %v, and error %v", command, string(out), err)
-		return -1, string(out), err
+func scheduler() {
+	tk := time.NewTicker(time.Duration(*interval) * time.Second)
+
+	for {
+		select {
+		case <-tk.C:
+			tidbFunctioning := doTest()
+			if *metrics != "" {
+				if err := reportProm(); err != nil {
+					log.Errorf("report prometheus error : %v", err)
+				}
+			}
+			if !tidbFunctioning && *suffixCommand != "" {
+				if exitCode, cmdOut, errCMD := runSuffixCommand(*suffixCommand); errCMD != nil || exitCode != 0 {
+					log.Errorf("execute command error,exitCode %d error information %v", exitCode, cmdOut)
+				}
+			}
+			if !tidbFunctioning {
+				log.Errorf("tidb_need_restart_now")
+			}
+
+		}
 	}
-	log.Infof("output %v", string(out))
-	waitStatus := cmd.ProcessState.Sys().(syscall.WaitStatus)
-	return int(waitStatus), string(out), err
+
 }
 
 func main() {
@@ -110,28 +112,21 @@ func main() {
 		log.Fatalf("parms error : %v", err)
 		return
 	}
-	var err error
-	for i := 0; i < 3; i++ {
-		err = mysqlTest()
-		if err == nil {
-			tidbFunctioning = true
-			break
-		}
-		log.Errorf("check %d mysql failed, error : %v", i, err)
-		time.Sleep(time.Second)
-	}
-	if *metrics != "" {
-		if err := reportProm(tidbFunctioning); err != nil {
-			log.Errorf("report prometheus error : %v", err)
-		}
-	}
-	if *suffixCommand != "" && !tidbFunctioning {
-		if exitCode, cmdOut, errCMD := runSuffixCommand(*suffixCommand); errCMD != nil || exitCode != 0 {
-			log.Errorf("execute command error,exitCode %d error information %v", exitCode, cmdOut)
-		}
-	}
+	go scheduler()
 
-	if !tidbFunctioning {
-		log.Errorf("tidb_need_restart_now")
-	}
+	sc := make(chan os.Signal, 1)
+	signal.Notify(sc,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		sig := <-sc
+		log.Errorf("get signal [%d] and exit", sig)
+		wg.Done()
+	}()
+	wg.Wait()
 }
