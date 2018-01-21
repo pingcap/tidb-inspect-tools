@@ -10,7 +10,7 @@ import (
 func getHostName() string {
 	instance, err := os.Hostname()
 	if err != nil {
-		instance = "Unknowhost"
+		instance = "Unknownhost"
 	}
 	return instance
 }
