@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -312,9 +311,4 @@ func (r *Run) GetRenderImages() {
 func (r *Run) SaveImage(title string, data []byte) error {
 	dstImage := filepath.Join(r.pngDir, fmt.Sprintf("%s.png", title))
 	return ioutil.WriteFile(dstImage, data, 0666)
-}
-
-//GetCPUNum get cpu number
-func GetCPUNum() int {
-	return runtime.NumCPU()
 }
