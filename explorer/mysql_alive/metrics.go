@@ -23,8 +23,3 @@ func reportProm(instance string) error {
 		prometheus.DefaultGatherer,
 	)
 }
-
-func init() {
-	prometheus.MustRegister(checkAlive)
-
-}
