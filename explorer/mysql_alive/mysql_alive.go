@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"os"
 	"os/signal"
@@ -27,6 +28,7 @@ var (
 	querytimeout  = flag.Int("query-timeout", 30, "execute query timeout")
 	suffixCommand = flag.String("suffix-command", "", "when check tidb failed and run shell command")
 	interval      = flag.Int64("interval", 180, "check alive interval")
+	logFile       = flag.String("log-file", "", "log filename")
 )
 
 func checkParams() error {
@@ -69,13 +71,11 @@ func doTest() bool {
 	for i := 0; i < 3; i++ {
 		err = mysqlTest()
 		if err == nil {
-			checkAlive.WithLabelValues("success").Inc()
 			return true
 		}
 		log.Errorf("check %d mysql failed, error : %v", i, err)
 		time.Sleep(time.Second)
 	}
-	checkAlive.WithLabelValues("fail").Inc()
 	return false
 
 }
@@ -89,6 +89,12 @@ func scheduler() {
 		case <-tk.C:
 			tidbFunctioning := doTest()
 			if *metrics != "" {
+				if tidbFunctioning {
+					checkAlive.WithLabelValues("success").Inc()
+				} else {
+					checkAlive.WithLabelValues("fail").Inc()
+				}
+
 				if err := reportProm(instance); err != nil {
 					log.Errorf("report prometheus error : %v", err)
 				}
@@ -113,6 +119,21 @@ func main() {
 		log.Fatalf("parms error : %v", err)
 		return
 	}
+	if *logFile != "" {
+		lf, err := os.OpenFile(*logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0660)
+		if err != nil {
+			fmt.Printf("can not open log file %s error %v", *logFile, err)
+			return
+		}
+		log.SetOutput(lf)
+		defer lf.Close()
+	}
+	log.SetLevel(log.DebugLevel)
+
+	if *metrics != "" {
+		prometheus.MustRegister(checkAlive)
+	}
+
 	go scheduler()
 
 	sc := make(chan os.Signal, 1)
