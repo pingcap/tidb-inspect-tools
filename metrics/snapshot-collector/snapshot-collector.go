@@ -16,7 +16,7 @@ func main() {
 		return
 	}
 	var wg sync.WaitGroup
-	for i := 0; i < GetCPUNum(); i++ {
+	for i := 0; i < *benchNum; i++ {
 		wg.Add(1)
 		go func() {
 			r.GetRenderImages()

@@ -31,15 +31,16 @@ type Run struct {
 }
 
 var (
-	addr      = flag.String("address", "http://192.168.2.188:3000", "input grafana address")
-	from      = flag.String("start", time.Now().AddDate(0, 0, -3).Format(TimeFormat), "input start time, default is 3 days ago")
-	to        = flag.String("end", time.Now().Format(TimeFormat), "input end time,default is now")
-	name      = flag.String("name", "", "input panel name")
-	timeout   = flag.Int64("timeout", 60, "input execute query timeout")
-	user      = flag.String("user", "admin", "input granfana user")
-	password  = flag.String("password", "admin", "input granfana password")
-	dashboard = flag.String("dashboard", "", "input dashboard name")
-	renderURL = flag.String("renderurl", "", "input render url")
+	addr      = flag.String("address", "http://192.168.2.188:3000", "grafana address")
+	from      = flag.String("start", time.Now().AddDate(0, 0, -3).Format(TimeFormat), "start time, default is 3 days ago")
+	to        = flag.String("end", time.Now().Format(TimeFormat), "end time,default is now")
+	name      = flag.String("name", "", "panel name")
+	timeout   = flag.Int64("timeout", 60, "execute query timeout")
+	user      = flag.String("user", "admin", "granfana user")
+	password  = flag.String("password", "admin", "granfana password")
+	dashboard = flag.String("dashboard", "", "dashboard name")
+	renderURL = flag.String("renderurl", "", "render url")
+	benchNum  = flag.Int("bench-number", 3, "bench number get grafana's data goroutine number")
 
 	stringReplacer = strings.NewReplacer(" ", "_", "/", "_", "\\", "_")
 )
