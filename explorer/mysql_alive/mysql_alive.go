@@ -17,6 +17,8 @@ import (
 const (
 	//TestQuery check tidb normal
 	TestQuery = "SELECT count(*) FROM mysql.tidb"
+	//KillCMD kill tidb process
+	KillCMD = "kill -9"
 )
 
 var (
@@ -27,6 +29,7 @@ var (
 	metrics       = flag.String("metrics", "", "metrics address")
 	querytimeout  = flag.Int("query-timeout", 30, "execute query timeout")
 	suffixCommand = flag.String("suffix-command", "", "when check tidb failed and run shell command")
+	killTrigger   = flag.Bool("kill-trigger", false, "kill -9 tidb's process that listen port")
 	interval      = flag.Int64("interval", 180, "check alive interval")
 	logFile       = flag.String("log-file", "", "log filename")
 )
@@ -74,7 +77,7 @@ func doTest() bool {
 			return true
 		}
 		log.Errorf("check %d mysql failed, error : %v", i, err)
-		time.Sleep(time.Second)
+		time.Sleep(3 * time.Second)
 	}
 	return false
 
@@ -99,9 +102,19 @@ func scheduler() {
 					log.Errorf("report prometheus error : %v", err)
 				}
 			}
-			if !tidbFunctioning && *suffixCommand != "" {
-				if exitCode, cmdOut, errCMD := runSuffixCommand(*suffixCommand); errCMD != nil || exitCode != 0 {
-					log.Errorf("execute command error,exitCode %d error information %v", exitCode, cmdOut)
+			if !tidbFunctioning {
+				var CMD string
+				if pid := getPidFromPort(int64(*port)); pid != 0 && *killTrigger {
+					CMD = fmt.Sprintf("%s %d", KillCMD, pid)
+				}
+				if *suffixCommand != "" && CMD != "" {
+					CMD = fmt.Sprintf("%s && %s ", CMD, *suffixCommand)
+				} else if *suffixCommand != "" {
+					CMD = *suffixCommand
+				}
+				if CMD != "" {
+					exitCode, cmdOut, errCMD := runCommand(CMD)
+					log.Infof("execute command result,exitCode %d information %v error %v", exitCode, cmdOut, errCMD)
 				}
 			}
 			if !tidbFunctioning {
