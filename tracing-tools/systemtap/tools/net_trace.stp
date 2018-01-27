@@ -1,0 +1,45 @@
+#! /usr/bin/env stap
+
+/*
+ * net_trace.stp    Trace TCP message
+ *
+ * Usage: sudo stap net_trace.stp -x <pid>
+ * Example: sudo stap net_trace.stp -x 74204
+ * Doc: See net_trace.stp.md.
+ */
+
+probe begin
+{
+    printf("begin to trace TCP message\n");
+}
+
+probe kernel.function("tcp_accept").return?,
+      kernel.function("inet_csk_accept").return? {
+    if (target() != pid()) next
+
+    sock = $return
+    if (sock != 0)
+        printf("%15s[%ld] - port %d accept request from %s \n", execname(), tid(), inet_get_local_port(sock), inet_get_ip_source(sock))
+}
+
+probe tcp.sendmsg.return
+{
+    if (target() != pid()) next
+
+    saddr = format_ipaddr(__ip_sock_saddr(@entry($sk)), __ip_sock_family(@entry($sk)))
+    daddr = format_ipaddr(__ip_sock_daddr(@entry($sk)), __ip_sock_family(@entry($sk)))
+    sport = __tcp_sock_sport(@entry($sk))
+    dport = __tcp_sock_dport(@entry($sk))
+
+    // size: Number of bytes received or a negative error code if an error occurred.
+    if (size > 0)
+        printf("%15s[%ld] - %s:%ld send %d bytes -> %s:%ld\n", execname(), tid(), saddr, sport, size, daddr, dport)
+}
+
+probe tcp.recvmsg.return
+{
+    if (target() != pid()) next
+
+    if (size > 0)
+        printf("%15s[%ld] - %s:%ld recv %d bytes <- %s:%ld\n", execname(), tid(), saddr, sport, size, daddr, dport)
+}
