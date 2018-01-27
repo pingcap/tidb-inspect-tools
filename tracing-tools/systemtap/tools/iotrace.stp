@@ -1,0 +1,43 @@
+#! /usr/bin/env stap
+
+/*
+ * iotrace.stp    Trace thread IO
+ *
+ * Usage: sudo stap iotrace.stp -x <pid>
+ * Example: sudo stap iotrace.stp -x 33709
+ * Doc: See iotrace.md.
+ */
+
+probe begin
+{
+    printf("begin to trace thread IO\n");
+}
+
+probe vfs.read.return
+{
+    if (target() != pid()) next
+     
+    printf("%s[%ld] - read %d bytes from %s\n", execname(), tid(), bytes_read, reverse_path_walk($file->f_path->dentry))
+}
+
+probe vfs.write.return
+{
+    if (target() != pid()) next
+
+    printf("%s[%ld] - write %d bytes to %s\n", execname(), tid(), bytes_written, reverse_path_walk($file->f_path->dentry))
+}
+
+probe vfs.open.return
+{
+    if (target() != pid()) next
+
+    printf("%s[%ld] - open %s\n", execname(), tid(), pathname)
+}
+
+probe syscall.close
+{
+    if (target() != pid()) next
+
+    file = task_fd_lookup(task_current(), fd)
+    printf("%s[%ld] - close %s\n", execname(), tid(), fullpath_struct_path(&@cast(file, "file")->f_path))
+}
