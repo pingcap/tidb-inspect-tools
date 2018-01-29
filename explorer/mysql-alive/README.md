@@ -1,4 +1,4 @@
-mysql_alive
+mysql-alive
 ------
 
 **This tool is used to check tidb alive**
@@ -6,11 +6,11 @@ mysql_alive
 - install Golang(1.8.3+)
 - `make`
 
-**The target executable binary file is bin/mysql_alive**
+**The target executable binary file is bin/mysql-alive**
 
 ### Usages
 ```
-Usage of ./bin//mysql_alive:
+Usage of ./bin/mysql-alive:
   -host string
     	tidb host (default "127.0.0.1")
   -interval int
@@ -42,6 +42,6 @@ Usage of ./bin//mysql_alive:
 
 ### Examples:
 - check tidb 
-	- `./bin/mysql_alive -interval 30 -kill-trigger  -log-file mysql_alive.log -metrics "10.0.3.6:9091" -port 4000 -suffix-command "/mnt/resource/tidb_cluster/scripts/start_tidb.sh"`
+	- `./bin/mysql-alive -interval 30 -kill-trigger  -log-file mysql_alive.log -metrics "10.0.3.6:9091" -port 4000 -suffix-command "/mnt/resource/tidb_cluster/scripts/start_tidb.sh"`
 
 	
