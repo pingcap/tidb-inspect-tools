@@ -19,6 +19,7 @@ func getHostName() string {
 }
 
 func runCommand(command string) (int, string, error) {
+	log.Debugf("run command %s", command)
 	cmd := exec.Command("/bin/bash", "-c", command)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

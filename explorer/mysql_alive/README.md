@@ -10,9 +10,15 @@ mysql_alive
 
 ### Usages
 ```
-Usage of ./mysql_alive:
+Usage of ./bin//mysql_alive:
   -host string
     	tidb host (default "127.0.0.1")
+  -interval int
+    	check alive interval (default 180)
+  -kill-trigger
+    	kill -9 tidb's process that listen port
+  -log-file string
+    	log filename
   -metrics string
     	metrics address
   -password string
@@ -28,8 +34,14 @@ Usage of ./mysql_alive:
 ```
 
 
+### Attentions
+- `kill-trigger` is **very careful**, It's use command **`kill -9 $PID`**
+- `kill-trigger` and `suffix-command` all setting
+	- **`kill-trigger` execute first**
+
+
 ### Examples:
 - check tidb 
-	- `./mysql_alive -host 127.0.0.1  -port 4000  -metrics 10.0.3.6:9091`
+	- `./bin/mysql_alive -interval 30 -kill-trigger  -log-file mysql_alive.log -metrics "10.0.3.6:9091" -port 4000 -suffix-command "/mnt/resource/tidb_cluster/scripts/start_tidb.sh"`
 
 	

@@ -83,44 +83,42 @@ func doTest() bool {
 
 }
 
+func doScheduler(instance string) {
+	tidbFunctioning := doTest()
+	if *metrics != "" {
+		if tidbFunctioning {
+			checkAlive.WithLabelValues("success").Inc()
+		} else {
+			checkAlive.WithLabelValues("fail").Inc()
+		}
+
+		if err := reportProm(instance); err != nil {
+			log.Errorf("report prometheus error : %v", err)
+		}
+	}
+	if !tidbFunctioning && *killTrigger {
+		if pid := getPidFromPort(int64(*port)); pid != 0 {
+			CMD := fmt.Sprintf("%s %d", KillCMD, pid)
+			exitCode, cmdOut, errCMD := runCommand(CMD)
+			log.Infof("execute command result,exitCode %d information %v error %v", exitCode, cmdOut, errCMD)
+		}
+	}
+	if !tidbFunctioning && *suffixCommand != "" {
+		exitCode, cmdOut, errCMD := runCommand(*suffixCommand)
+		log.Infof("execute command result,exitCode %d information %v error %v", exitCode, cmdOut, errCMD)
+	}
+	if !tidbFunctioning {
+		log.Errorf("tidb_need_restart_now")
+	}
+}
+
 func scheduler() {
 	tk := time.NewTicker(time.Duration(*interval) * time.Second)
 	instance := getHostName()
-
 	for {
 		select {
 		case <-tk.C:
-			tidbFunctioning := doTest()
-			if *metrics != "" {
-				if tidbFunctioning {
-					checkAlive.WithLabelValues("success").Inc()
-				} else {
-					checkAlive.WithLabelValues("fail").Inc()
-				}
-
-				if err := reportProm(instance); err != nil {
-					log.Errorf("report prometheus error : %v", err)
-				}
-			}
-			if !tidbFunctioning {
-				var CMD string
-				if pid := getPidFromPort(int64(*port)); pid != 0 && *killTrigger {
-					CMD = fmt.Sprintf("%s %d", KillCMD, pid)
-				}
-				if *suffixCommand != "" && CMD != "" {
-					CMD = fmt.Sprintf("%s && %s ", CMD, *suffixCommand)
-				} else if *suffixCommand != "" {
-					CMD = *suffixCommand
-				}
-				if CMD != "" {
-					exitCode, cmdOut, errCMD := runCommand(CMD)
-					log.Infof("execute command result,exitCode %d information %v error %v", exitCode, cmdOut, errCMD)
-				}
-			}
-			if !tidbFunctioning {
-				log.Errorf("tidb_need_restart_now")
-			}
-
+			doScheduler(instance)
 		}
 	}
 
@@ -138,6 +136,10 @@ func main() {
 			fmt.Printf("can not open log file %s error %v", *logFile, err)
 			return
 		}
+		formatter := &log.TextFormatter{
+			FullTimestamp: true,
+		}
+		log.SetFormatter(formatter)
 		log.SetOutput(lf)
 		defer lf.Close()
 	}
