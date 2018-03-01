@@ -1,13 +1,24 @@
 package main
 
 import (
+	"encoding/json"
 	gonetstat "github.com/drael/GOnetstat"
+	"github.com/juju/errors"
 	log "github.com/sirupsen/logrus"
+	"io"
+	"io/ioutil"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
+)
+
+const (
+	checkTCPTimeout = 5 * time.Second
 )
 
 func getHostName() string {
@@ -24,10 +35,20 @@ func runCommand(command string) (int, string, error) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Errorf("exec command %s, output %v, and error %v", command, string(out), err)
-		return -1, string(out), err
+		return -1, string(out), errors.Trace(err)
 	}
 	waitStatus := cmd.ProcessState.Sys().(syscall.WaitStatus)
-	return int(waitStatus), string(out), err
+	return int(waitStatus), string(out), errors.Trace(err)
+}
+
+func isTCPPortAvailable(hostPort string) bool {
+	conn, err := net.DialTimeout("tcp", hostPort, checkTCPTimeout)
+	if err != nil {
+		log.Errorf("conn host  port %s with error %v", hostPort, err)
+		return false
+	}
+	defer conn.Close()
+	return true
 }
 
 func getPidFromPort(port int64) int64 {
@@ -41,7 +62,7 @@ func getPidFromPort(port int64) int64 {
 	for _, p := range netstat {
 		if p.Port == port && !strings.Contains(p.Pid, "-") {
 			if tPid, err := strconv.ParseInt(p.Pid, 10, 64); err != nil {
-				log.Errorf("can not tranform pid %s with error %v", p.Pid, err)
+				log.Errorf("can not tranform pid %s with error %v", p.Pid, errors.Trace(err))
 			} else {
 				pid = tPid
 			}
@@ -49,4 +70,32 @@ func getPidFromPort(port int64) int64 {
 		}
 	}
 	return pid
+}
+
+func xGet(url string, data interface{}, getData bool) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return errors.Errorf("http get url %s returncode %d", url, resp.StatusCode)
+	}
+
+	if getData {
+		return readJSON(resp.Body, data)
+	}
+	return nil
+}
+
+func readJSON(r io.ReadCloser, data interface{}) error {
+	defer r.Close()
+	d, err := ioutil.ReadAll(r)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	err = json.Unmarshal(d, data)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	return nil
 }

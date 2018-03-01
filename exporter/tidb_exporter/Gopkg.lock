@@ -8,22 +8,52 @@
   revision = "4c0e84591b9aa9e6dcfdf3e020114cd81f89d5f9"
 
 [[projects]]
+  branch = "master"
+  name = "github.com/drael/GOnetstat"
+  packages = ["."]
+  revision = "a08125f5157d481dd0d0355c021467bd8c84eb6d"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/dustin/go-humanize"
+  packages = ["."]
+  revision = "bb3d318650d48840a39aa21a027c6630e198e626"
+
+[[projects]]
   name = "github.com/go-sql-driver/mysql"
   packages = ["."]
   revision = "a0583e0143b1624142adab07e0e97fe106d99561"
   version = "v1.3"
 
 [[projects]]
-  branch = "master"
   name = "github.com/golang/protobuf"
   packages = ["proto"]
-  revision = "1e59b77b52bf8e4b449a57e6f79f21226d571845"
+  revision = "925541529c1fa6821df4e44ce2723319eb2be768"
+  version = "v1.0.0"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/juju/errors"
+  packages = ["."]
+  revision = "c7d06af17c68cd34c835053720b21f6549d9b0ee"
 
 [[projects]]
   name = "github.com/matttproud/golang_protobuf_extensions"
   packages = ["pbutil"]
   revision = "3247c84500bff8d9fb6d579d800f20b3e091582c"
   version = "v1.0.0"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/pingcap/kvproto"
+  packages = ["pkg/eraftpb","pkg/metapb","pkg/pdpb"]
+  revision = "7fe0eb69e3e6d5e03c2222651b065ecfe3e1ae31"
+
+[[projects]]
+  name = "github.com/pingcap/pd"
+  packages = ["pkg/typeutil"]
+  revision = "137fa734472a76c509fbfd9cb9bc6d0dc804a3b7"
+  version = "v1.0.8"
 
 [[projects]]
   name = "github.com/prometheus/client_golang"
@@ -41,13 +71,13 @@
   branch = "master"
   name = "github.com/prometheus/common"
   packages = ["expfmt","internal/bitbucket.org/ww/goautoneg","model"]
-  revision = "2e54d0b93cba2fd133edc32211dcc32c06ef72ca"
+  revision = "6fb6fce6f8b75884b92e1889c150403fc0872c5e"
 
 [[projects]]
   branch = "master"
   name = "github.com/prometheus/procfs"
-  packages = [".","xfs"]
-  revision = "b15cd069a83443be3154b719d0cc9fe8117f09fb"
+  packages = [".","internal/util","nfs","xfs"]
+  revision = "75f2d6163c7a100bed6e971044ea3de30ee3a678"
 
 [[projects]]
   name = "github.com/sirupsen/logrus"
@@ -58,6 +88,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "50ec56d5d6f8eb4a665b0a1fafb51b6336d0a3fdbac13d195be3d7ba25366748"
+  inputs-digest = "858d8678771acc6bf171a0dc9e52c33633849d42ecdfa22907fd0004ec7a503b"
   solver-name = "gps-cdcl"
   solver-version = 1

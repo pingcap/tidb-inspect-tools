@@ -11,12 +11,12 @@ LDFLAGS += -X "github.com/pingcap/tidb-inspector-tools/util.GitHash=$(shell git 
 
 GOBUILD=$(GO) build -ldflags '$(LDFLAGS)'
 
-default: mysql-alive
+default: tidb_exporter
 
-all: check test mysql-alive
+all: check test tidb_exporter
 
-mysql-alive:
-	$(GOBUILD) -o bin/mysql-alive *.go
+tidb_exporter:
+	$(GOBUILD) -o bin/tidb_exporter *.go
 
 test:
 	$(GOTEST) --race $(PACKAGES)
@@ -35,4 +35,4 @@ check:
 clean:
 	@rm -rf bin/*
 
-.PHONY: all test clean mysql-alive
+.PHONY: all test clean tidb_exporter

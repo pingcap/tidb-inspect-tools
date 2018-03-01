@@ -1,125 +1,64 @@
 package main
 
 import (
-	"database/sql"
 	"flag"
 	"fmt"
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/juju/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
 
 const (
-	//TestQuery check tidb normal
-	TestQuery = "SELECT count(*) FROM mysql.tidb"
 	//KillCMD kill tidb process
 	KillCMD = "kill -9"
 )
 
 var (
-	host          = flag.String("host", "127.0.0.1", "tidb host")
-	port          = flag.Int("port", 4000, "tidb port")
-	user          = flag.String("user", "root", "tidb user")
-	password      = flag.String("password", "", "tidb password")
-	metrics       = flag.String("metrics", "", "metrics address")
-	querytimeout  = flag.Int("query-timeout", 30, "execute query timeout")
-	suffixCommand = flag.String("suffix-command", "", "when check tidb failed and run shell command")
-	killTrigger   = flag.Bool("kill-trigger", false, "kill -9 tidb's process that listen port")
-	interval      = flag.Int64("interval", 180, "check alive interval")
-	logFile       = flag.String("log-file", "", "log filename")
+	user         = flag.String("user", "root", "tidb user")
+	password     = flag.String("password", "", "tidb password")
+	metrics      = flag.String("metrics", "", "metrics address")
+	querytimeout = flag.Int("query-timeout", 20, "tidb execute query timeout")
+	interval     = flag.Int64("interval", 180, "check alive interval")
+	tidbs        = flag.String("tidb-list", "", "tidb list, example:'10.0.3.5:4000,10.0.3.6:4000'")
+	tikvs        = flag.String("tikv-list", "", "tikv list, example:'10.0.3.5:20160,10.0.3.6:20160'")
+	pds          = flag.String("pd-list", "", "pd list, example:'http://10.0.3.5:2379,http://10.0.3.6:2379'")
+	daemon       = flag.Bool("daemon", false, "run as daemon")
+
+	logFile  = flag.String("log-file", "", "log filename")
+	logLevel = flag.String("log-level", "info", "log level:panic,fatal,error,warning,info,debug")
+
+	//suffixCommand = flag.String("suffix-command", "", "run shell command when check tidb failed, work with option kill-trigger")
+	//killTrigger   = flag.Bool("kill-trigger", false, "only this mon)itor running with tidb process one host, kill -9 tidb's process that listen port;work with suffix-command")
+	//self          = flag.Bool("self", true, "only this monitor and watched tidb's process are running one host, work with option kill-trigger and self")
 )
 
 func checkParams() error {
-	return nil
-}
-
-func mysqlTest() error {
-	var dsn string
-	if *password == "" {
-		dsn = fmt.Sprintf("%s@tcp(%s:%d)/mysql?charset=utf8&timeout=%ds&writeTimeout=%ds&readTimeout=%ds",
-			*user, *host, *port, *querytimeout, *querytimeout, *querytimeout)
-	} else {
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%d)/mysql?charset=utf8&timeout=%ds&writeTimeout=%ds&readTimeout=%ds",
-			*user, *password, *host, *port, *querytimeout, *querytimeout, *querytimeout)
-	}
-
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	rs, err := db.Query(TestQuery)
-	if err != nil {
-		return err
-	}
-	defer rs.Close()
-	var tc int64
-	for rs.Next() {
-		err := rs.Scan(&tc)
-		if err != nil {
-			return err
-		}
-		break
+	if !*daemon && (*tidbs == "" && *pds == "") {
+		return errors.Errorf("please input tidb-list or pd-list when not run as daemon")
 	}
 	return nil
 }
 
-func doTest() bool {
-	var err error
-	for i := 0; i < 3; i++ {
-		err = mysqlTest()
-		if err == nil {
-			return true
-		}
-		log.Errorf("check %d mysql failed, error : %v", i, err)
-		time.Sleep(3 * time.Second)
-	}
-	return false
-
-}
-
-func doScheduler(instance string) {
-	tidbFunctioning := doTest()
-	if *metrics != "" {
-		if tidbFunctioning {
-			checkAlive.WithLabelValues("success").Inc()
-		} else {
-			checkAlive.WithLabelValues("fail").Inc()
-		}
-
-		if err := reportProm(instance); err != nil {
-			log.Errorf("report prometheus error : %v", err)
-		}
-	}
-	if !tidbFunctioning && *killTrigger {
-		if pid := getPidFromPort(int64(*port)); pid != 0 {
-			CMD := fmt.Sprintf("%s %d", KillCMD, pid)
-			exitCode, cmdOut, errCMD := runCommand(CMD)
-			log.Infof("execute command result,exitCode %d information %v error %v", exitCode, cmdOut, errCMD)
-		}
-	}
-	if !tidbFunctioning && *suffixCommand != "" {
-		exitCode, cmdOut, errCMD := runCommand(*suffixCommand)
-		log.Infof("execute command result,exitCode %d information %v error %v", exitCode, cmdOut, errCMD)
-	}
-	if !tidbFunctioning {
-		log.Errorf("tidb_need_restart_now")
-	}
-}
-
-func scheduler() {
-	tk := time.NewTicker(time.Duration(*interval) * time.Second)
+func daemonMode() {
 	instance := getHostName()
-	for {
-		select {
-		case <-tk.C:
-			doScheduler(instance)
-		}
+	if *metrics != "" {
+		prometheus.MustRegister(exporter)
+		go daemonProm(instance)
+	}
+
+	if *tidbs != "" {
+		go goroutineTiDB(strings.Split(*tidbs, ","), time.Duration(*interval))
+	}
+
+	if *pds != "" {
+		go goroutinePD(strings.Split(*pds, ","), time.Duration(*interval))
+		go goroutineTiKV(strings.Split(*pds, ","), time.Duration(*interval))
 	}
 
 }
@@ -127,7 +66,11 @@ func scheduler() {
 func main() {
 	flag.Parse()
 	if err := checkParams(); err != nil {
-		log.Fatalf("parms error : %v", err)
+		fmt.Printf("parms error : %v", err)
+		return
+	}
+	if !*daemon {
+		commandMode()
 		return
 	}
 	if *logFile != "" {
@@ -145,11 +88,7 @@ func main() {
 	}
 	log.SetLevel(log.DebugLevel)
 
-	if *metrics != "" {
-		prometheus.MustRegister(checkAlive)
-	}
-
-	go scheduler()
+	go daemonMode()
 
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc,
