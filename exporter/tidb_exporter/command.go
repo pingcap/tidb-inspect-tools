@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	gh "github.com/dustin/go-humanize"
 	"strings"
 )
 
@@ -17,7 +18,7 @@ func commandMode() {
 		fmt.Printf("PD:\n")
 		if pdhs, err := checkPD(strings.Split(*pds, ",")); err == nil {
 			for _, pdh := range pdhs {
-				fmt.Printf("\tName: %s\tID: %s\tClientURLs: %s Health:%s\n",
+				fmt.Printf("\tName: %s\tID: %d\tClientURLs: %s\tHealth: %t\n",
 					pdh.Name, pdh.MemberID, strings.Join(pdh.ClientUrls, ","), pdh.Health)
 			}
 		} else {
@@ -33,14 +34,14 @@ func commandMode() {
 
 	*/
 	//tikv information
-	if *tikvs != "" {
+	if *pds != "" {
 		fmt.Printf("TiKV:\n")
 		if tikvInfos, err := checkTiKV(strings.Split(*pds, ",")); err == nil {
 			for _, tikvInfo := range tikvInfos.Stores {
 				store := tikvInfo.Store
 				stat := tikvInfo.Status
 				fmt.Printf("\tID: %d\tAddress: %s\tState: %s\tCapacity: %s\tAvailable: %s\tLastHeartbeatTS: %s\n",
-					store.Id, store.Address, store.StateName, stat.Capacity, stat.Available, stat.LastHeartbeatTS)
+					store.Id, store.Address, store.StateName, gh.IBytes(uint64(stat.Capacity)), gh.IBytes(uint64(stat.Available)), stat.LastHeartbeatTS)
 			}
 		} else {
 			fmt.Printf("Error: %v\n", err)
@@ -57,7 +58,7 @@ func commandMode() {
 		fmt.Printf("TiDB:\n")
 		if tidbhs, err := checkTiDB(strings.Split(*tidbs, ",")); err == nil {
 			for _, tidbh := range tidbhs {
-				fmt.Printf("\tAddress: %s\tHealth: %s\nMessage: %s", tidbh.Address, tidbh.Health, tidbh.Message)
+				fmt.Printf("\tAddress: %s\tHealth: %t\tMessage: %s\n", tidbh.Address, tidbh.Health, tidbh.Message)
 			}
 		} else {
 			fmt.Printf("Error: %v\n", err)

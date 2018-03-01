@@ -71,7 +71,7 @@ func checkPD(pdURLs []string) (pdHealths, error) {
 	var pdhs pdHealths
 	var err error
 	// new api
-	log.Infof("check pd health with new api")
+	//log.Infof("check pd health with new api")
 	for _, pdURL := range pdURLs {
 		newPDHealthURL := fmt.Sprintf("%s%s", pdURL, healthAPI)
 		if err = xGet(newPDHealthURL, &pdhs, true); err == nil {
@@ -84,7 +84,7 @@ func checkPD(pdURLs []string) (pdHealths, error) {
 	}
 
 	//old api
-	log.Infof("check pd health with old api")
+	//log.Infof("check pd health with old api")
 	var pdMembers []*pdpb.Member
 	for _, pdURL := range pdURLs {
 		pdMembersURL := fmt.Sprintf("%s%s", pdURL, membersAPI)

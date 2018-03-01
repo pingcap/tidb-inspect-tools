@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/juju/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/pd/pkg/typeutil"
@@ -50,13 +51,14 @@ type storesInfo struct {
 }
 
 func checkTiKV(pdURLs []string) (*storesInfo, error) {
+	var err error
 	stores := &storesInfo{}
 	for _, pdURL := range pdURLs {
-		if err := xGet(pdURL, stores, true); err == nil {
+		if err = xGet(fmt.Sprintf("%s%s", pdURL, pdStoresAPI), stores, true); err == nil {
 			return stores, nil
 		}
 	}
-	return stores, errors.Errorf("get nothing form pd")
+	return stores, errors.Trace(err)
 }
 
 func goroutineTiKV(pdURLs []string, checkInterval time.Duration) {
