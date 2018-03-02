@@ -71,14 +71,14 @@ func goroutineTiDB(tidbs []string, checkInterval time.Duration) {
 	for {
 		if tidbhs, err := checkTiDB(tidbs); err != nil {
 			log.Debugf("check tidb failed with error %v", err)
-			exporter.WithLabelValues(promTiDBType, checkedAllInstance, checkedFailed)
+			exporter.WithLabelValues(promTiDBType, checkedAllInstance, checkedFailed).Inc()
 		} else {
 			for _, h := range tidbhs {
 				checked := checkedSuccess
 				if !h.Health {
 					checked = checkedFailed
 				}
-				exporter.WithLabelValues(promTiDBType, h.Address, checked)
+				exporter.WithLabelValues(promTiDBType, h.Address, checked).Inc()
 			}
 		}
 		time.Sleep(checkInterval)

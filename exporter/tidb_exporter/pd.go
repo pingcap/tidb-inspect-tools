@@ -117,14 +117,14 @@ func goroutinePD(pdURLs []string, checkInterval time.Duration) {
 	for {
 		if pdhs, err := checkPD(pdURLs); err != nil {
 			log.Debugf("check pd failed with error %v", err)
-			exporter.WithLabelValues(promPDType, checkedAllInstance, checkedFailed)
+			exporter.WithLabelValues(promPDType, checkedAllInstance, checkedFailed).Inc()
 		} else {
 			for _, pdh := range pdhs {
 				checked := checkedSuccess
 				if !pdh.Health {
 					checked = checkedFailed
 				}
-				exporter.WithLabelValues(promPDType, pdh.Name, checked)
+				exporter.WithLabelValues(promPDType, pdh.Name, checked).Inc()
 			}
 		}
 		time.Sleep(checkInterval)

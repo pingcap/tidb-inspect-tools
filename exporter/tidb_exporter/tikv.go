@@ -65,14 +65,14 @@ func goroutineTiKV(pdURLs []string, checkInterval time.Duration) {
 	for {
 		if tikvhs, err := checkTiKV(pdURLs); err != nil {
 			log.Debugf("check TiKV with error %v", err)
-			exporter.WithLabelValues(promTiKVType, checkedAllInstance, checkedFailed)
+			exporter.WithLabelValues(promTiKVType, checkedAllInstance, checkedFailed).Inc()
 		} else {
 			for _, tikvh := range tikvhs.Stores {
 				checked := checkedSuccess
 				if strings.ToLower(tikvh.Store.StateName) != strings.ToLower(tikvSuccessStatus) {
 					checked = checkedFailed
 				}
-				exporter.WithLabelValues(promTiKVType, tikvh.Store.Address, checked)
+				exporter.WithLabelValues(promTiKVType, tikvh.Store.Address, checked).Inc()
 			}
 		}
 		time.Sleep(checkInterval)

@@ -53,12 +53,12 @@ func daemonMode() {
 	}
 
 	if *tidbs != "" {
-		go goroutineTiDB(strings.Split(*tidbs, ","), time.Duration(*interval))
+		go goroutineTiDB(strings.Split(*tidbs, ","), time.Duration(*interval)*time.Second)
 	}
 
 	if *pds != "" {
-		go goroutinePD(strings.Split(*pds, ","), time.Duration(*interval))
-		go goroutineTiKV(strings.Split(*pds, ","), time.Duration(*interval))
+		go goroutinePD(strings.Split(*pds, ","), time.Duration(*interval)*time.Second)
+		go goroutineTiKV(strings.Split(*pds, ","), time.Duration(*interval)*time.Second)
 	}
 
 }

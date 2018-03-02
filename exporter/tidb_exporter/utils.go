@@ -77,6 +77,7 @@ func xGet(url string, data interface{}, getData bool) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return errors.Errorf("http get url %s returncode %d", url, resp.StatusCode)
 	}
@@ -88,7 +89,6 @@ func xGet(url string, data interface{}, getData bool) error {
 }
 
 func readJSON(r io.ReadCloser, data interface{}) error {
-	defer r.Close()
 	d, err := ioutil.ReadAll(r)
 	if err != nil {
 		return errors.Trace(err)
