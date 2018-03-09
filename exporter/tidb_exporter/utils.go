@@ -107,13 +107,13 @@ func xPost(url string, data interface{}) error {
 	if errJ != nil {
 		return errJ
 	}
-	var resp *http.Response
 	var err error
 	for i := 0; i < 3; i++ {
-		resp, err = http.Post(url, contentTypeJSON, bytes.NewBuffer(b))
+		resp, errR := http.Post(url, contentTypeJSON, bytes.NewBuffer(b))
 		if err == nil || resp.StatusCode/100 == 2 {
 			break
 		}
+		err = errR
 	}
 	return err
 }

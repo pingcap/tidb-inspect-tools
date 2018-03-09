@@ -55,10 +55,10 @@ type alert *Alert
 type Alert struct {
 	// Label value pairs for purpose of aggregation, matching, and disposition
 	// dispatching. This must minimally include an "alertname" label.
-	Labels Labels `json:"labels"`
+	Labels map[string]string `json:"labels"`
 
 	// Extra key/value information which does not define alert identity.
-	Annotations Labels `json:"annotations"`
+	Annotations map[string]string `json:"annotations"`
 
 	// The known time range for this alert. Both ends are optional.
 	StartsAt     time.Time `json:"startsAt,omitempty"`
@@ -66,41 +66,24 @@ type Alert struct {
 	GeneratorURL string    `json:"generatorURL,omitempty"`
 }
 
-// https://github.com/prometheus/prometheus/blob/master/pkg/labels/labels.go
-// Label is a key/value pair of strings.
-type Label struct {
-	Name, Value string
-}
-
-// Labels is a sorted set of labels. Order has to be guaranteed upon
-// instantiation.
-type Labels []Label
-
-func genLabel(name, value string) Label {
-	return Label{
-		Name:  name,
-		Value: value,
-	}
-}
-
 func genAlert(alertLables, alertAnnotations map[string]string) alert {
-	var ls, as Labels
+	ls := make(map[string]string)
 	//generate labels
 	for k, v := range baseLabelsMap {
-		ls = append(ls, genLabel(k, v))
+		ls[k] = v
 	}
 	for k, v := range alertLables {
-		ls = append(ls, genLabel(k, v))
+		ls[k] = v
 	}
 	//generate annotations
-	for k, v := range alertAnnotations {
-		as = append(as, genLabel(k, v))
-	}
+	//for k, v := range alertAnnotations {
+	//	as = append(as, genLabel(k, v))
+	//}
 
 	return &Alert{
 		StartsAt:    time.Now(),
 		Labels:      ls,
-		Annotations: as,
+		Annotations: alertAnnotations,
 	}
 }
 
@@ -108,7 +91,7 @@ func sendAlert(alertHosts []string, alertLabels, alertAnnotations map[string]str
 	alerts := []alert{
 		genAlert(alertLabels, alertAnnotations),
 	}
-	log.Debugf("alers message %v", alerts)
+	log.Debugf("alerts message %v", *alerts[0])
 
 	var sendStatus bool
 	for _, host := range alertHosts {
