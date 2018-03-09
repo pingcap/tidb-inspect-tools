@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
-	"github.com/prometheus/prometheus/notifier"
-	"github.com/prometheus/prometheus/pkg/labels"
+	//"github.com/prometheus/prometheus/notifier"
+	//"github.com/prometheus/prometheus/pkg/labels"
 	log "github.com/sirupsen/logrus"
 	"strings"
 	"time"
@@ -48,17 +48,43 @@ var (
 ]
 */
 
-type alert *notifier.Alert
+type alert *Alert
 
-func genLabel(name, value string) labels.Label {
-	return labels.Label{
+// import error and copy it from prometheus https://github.com/prometheus/prometheus/blob/master/notifier/notifier.go
+// Alert is a generic representation of an alert in the Prometheus eco-system.
+type Alert struct {
+	// Label value pairs for purpose of aggregation, matching, and disposition
+	// dispatching. This must minimally include an "alertname" label.
+	Labels Labels `json:"labels"`
+
+	// Extra key/value information which does not define alert identity.
+	Annotations Labels `json:"annotations"`
+
+	// The known time range for this alert. Both ends are optional.
+	StartsAt     time.Time `json:"startsAt,omitempty"`
+	EndsAt       time.Time `json:"endsAt,omitempty"`
+	GeneratorURL string    `json:"generatorURL,omitempty"`
+}
+
+// https://github.com/prometheus/prometheus/blob/master/pkg/labels/labels.go
+// Label is a key/value pair of strings.
+type Label struct {
+	Name, Value string
+}
+
+// Labels is a sorted set of labels. Order has to be guaranteed upon
+// instantiation.
+type Labels []Label
+
+func genLabel(name, value string) Label {
+	return Label{
 		Name:  name,
 		Value: value,
 	}
 }
 
 func genAlert(alertLables, alertAnnotations map[string]string) alert {
-	var ls, as labels.Labels
+	var ls, as Labels
 	//generate labels
 	for k, v := range baseLabelsMap {
 		ls = append(ls, genLabel(k, v))
@@ -71,7 +97,7 @@ func genAlert(alertLables, alertAnnotations map[string]string) alert {
 		as = append(as, genLabel(k, v))
 	}
 
-	return &notifier.Alert{
+	return &Alert{
 		StartsAt:    time.Now(),
 		Labels:      ls,
 		Annotations: as,

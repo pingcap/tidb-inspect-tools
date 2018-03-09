@@ -44,10 +44,10 @@
   version = "v1.0.0"
 
 [[projects]]
-  branch = "master"
+  branch = "hhkbp2/network-monitoring"
   name = "github.com/pingcap/kvproto"
   packages = ["pkg/eraftpb","pkg/metapb","pkg/pdpb"]
-  revision = "7fe0eb69e3e6d5e03c2222651b065ecfe3e1ae31"
+  revision = "6d28e4ce399fbd73cda348f83c9772763b38b3f0"
 
 [[projects]]
   name = "github.com/pingcap/pd"
@@ -77,7 +77,7 @@
   branch = "master"
   name = "github.com/prometheus/procfs"
   packages = [".","internal/util","nfs","xfs"]
-  revision = "75f2d6163c7a100bed6e971044ea3de30ee3a678"
+  revision = "1c7ff3de94ae006f58cba483a4c9c6d7c61e1d98"
 
 [[projects]]
   name = "github.com/sirupsen/logrus"
@@ -88,6 +88,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "858d8678771acc6bf171a0dc9e52c33633849d42ecdfa22907fd0004ec7a503b"
+  inputs-digest = "0b563301c59a1e33dbbf32d22cf991229dbc86c9fc669626d76046e57a726f1f"
   solver-name = "gps-cdcl"
   solver-version = 1
