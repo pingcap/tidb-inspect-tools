@@ -38,7 +38,7 @@
   name = "github.com/juju/errors"
 
 [[constraint]]
-  branch = "hhkbp2/network-monitoring"
+  branch = "master"
   name = "github.com/pingcap/kvproto"
 
 [[constraint]]

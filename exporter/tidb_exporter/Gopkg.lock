@@ -44,10 +44,10 @@
   version = "v1.0.0"
 
 [[projects]]
-  branch = "hhkbp2/network-monitoring"
+  branch = "master"
   name = "github.com/pingcap/kvproto"
   packages = ["pkg/eraftpb","pkg/metapb","pkg/pdpb"]
-  revision = "6d28e4ce399fbd73cda348f83c9772763b38b3f0"
+  revision = "7fe0eb69e3e6d5e03c2222651b065ecfe3e1ae31"
 
 [[projects]]
   name = "github.com/pingcap/pd"
