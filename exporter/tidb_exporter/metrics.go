@@ -15,6 +15,7 @@ const (
 	checkedAllInstance = "all"
 	checkedFailed      = "failed"
 	checkedSuccess     = "success"
+	checkedRestart     = "restart"
 )
 
 var (

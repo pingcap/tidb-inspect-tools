@@ -29,6 +29,7 @@ var (
 	tikvs        = flag.String("tikv-list", "", "tikv list, example:'10.0.3.5:20160,10.0.3.6:20160'")
 	pds          = flag.String("pd-list", "", "pd list, example:'http://10.0.3.5:2379,http://10.0.3.6:2379'")
 	daemon       = flag.Bool("daemon", false, "run as daemon")
+	alertmangers = flag.String("alertmanger-list", "", "alertmanger list,example:'10.0.3.5:9093,10.0.3.6:9093'")
 
 	logFile  = flag.String("log-file", "", "log filename")
 	logLevel = flag.String("log-level", "info", "log level:panic,fatal,error,warning,info,debug")

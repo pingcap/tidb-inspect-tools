@@ -123,6 +123,7 @@ func goroutinePD(pdURLs []string, checkInterval time.Duration) {
 				checked := checkedSuccess
 				if !pdh.Health {
 					checked = checkedFailed
+					xAlert("", promPDType, pdh.Name, checked)
 				}
 				exporter.WithLabelValues(promPDType, pdh.Name, checked).Inc()
 			}

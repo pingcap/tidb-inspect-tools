@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	gonetstat "github.com/drael/GOnetstat"
 	"github.com/juju/errors"
@@ -19,6 +20,7 @@ import (
 
 const (
 	checkTCPTimeout = 5 * time.Second
+	contentTypeJSON = "application/json"
 )
 
 func getHostName() string {
@@ -98,4 +100,20 @@ func readJSON(r io.ReadCloser, data interface{}) error {
 		return errors.Trace(err)
 	}
 	return nil
+}
+
+func xPost(url string, data interface{}) error {
+	b, errJ := json.Marshal(data)
+	if errJ != nil {
+		return errJ
+	}
+	var resp *http.Response
+	var err error
+	for i := 0; i < 3; i++ {
+		resp, err = http.Post(url, contentTypeJSON, bytes.NewBuffer(b))
+		if err == nil || resp.StatusCode/100 == 2 {
+			break
+		}
+	}
+	return err
 }

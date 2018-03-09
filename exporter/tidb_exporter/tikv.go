@@ -72,6 +72,13 @@ func goroutineTiKV(pdURLs []string, checkInterval time.Duration) {
 				if strings.ToLower(tikvh.Store.StateName) != strings.ToLower(tikvSuccessStatus) {
 					checked = checkedFailed
 				}
+				if tikvh.Status.Uptime.Nanoseconds() < checkInterval.Nanoseconds() {
+					checked = checkedRestart
+				}
+
+				if checked != checkedSuccess {
+					xAlert("", promTiKVType, tikvh.Store.Address, checked)
+				}
 				exporter.WithLabelValues(promTiKVType, tikvh.Store.Address, checked).Inc()
 			}
 		}

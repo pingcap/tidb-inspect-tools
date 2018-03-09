@@ -77,6 +77,7 @@ func goroutineTiDB(tidbs []string, checkInterval time.Duration) {
 				checked := checkedSuccess
 				if !h.Health {
 					checked = checkedFailed
+					xAlert("", promTiDBType, h.Address, checked)
 				}
 				exporter.WithLabelValues(promTiDBType, h.Address, checked).Inc()
 			}
