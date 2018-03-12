@@ -16,23 +16,23 @@ package schedulers
 import (
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/pd/server/cache"
 	"github.com/pingcap/pd/server/core"
 	"github.com/pingcap/pd/server/schedule"
+	log "github.com/sirupsen/logrus"
 )
 
 func init() {
-	schedule.RegisterScheduler("balance-region", func(opt schedule.Options, args []string) (schedule.Scheduler, error) {
-		return newBalanceRegionScheduler(opt), nil
+	schedule.RegisterScheduler("balance-region", func(limiter *schedule.Limiter, args []string) (schedule.Scheduler, error) {
+		return newBalanceRegionScheduler(limiter), nil
 	})
 }
 
 const storeCacheInterval = 30 * time.Second
 
 type balanceRegionScheduler struct {
-	opt      schedule.Options
+	*baseScheduler
 	cache    *cache.TTLUint64
 	limit    uint64
 	selector schedule.Selector
@@ -40,21 +40,22 @@ type balanceRegionScheduler struct {
 
 // newBalanceRegionScheduler creates a scheduler that tends to keep regions on
 // each store balanced.
-func newBalanceRegionScheduler(opt schedule.Options) schedule.Scheduler {
+func newBalanceRegionScheduler(limiter *schedule.Limiter) schedule.Scheduler {
 	ttlCache := cache.NewIDTTL(storeCacheInterval, 4*storeCacheInterval)
 	filters := []schedule.Filter{
 		schedule.NewCacheFilter(ttlCache),
-		schedule.NewStateFilter(opt),
-		schedule.NewHealthFilter(opt),
-		schedule.NewSnapshotCountFilter(opt),
-		schedule.NewStorageThresholdFilter(opt),
+		schedule.NewStateFilter(),
+		schedule.NewHealthFilter(),
+		schedule.NewSnapshotCountFilter(),
+		schedule.NewStorageThresholdFilter(),
+		schedule.NewPendingPeerCountFilter(),
 	}
-
+	base := newBaseScheduler(limiter)
 	return &balanceRegionScheduler{
-		opt:      opt,
-		cache:    ttlCache,
-		limit:    1,
-		selector: schedule.NewBalanceSelector(core.RegionKind, filters),
+		baseScheduler: base,
+		cache:         ttlCache,
+		limit:         1,
+		selector:      schedule.NewBalanceSelector(core.RegionKind, filters),
 	}
 }
 
@@ -66,23 +67,12 @@ func (s *balanceRegionScheduler) GetType() string {
 	return "balance-region"
 }
 
-func (s *balanceRegionScheduler) GetInterval() time.Duration {
-	return schedule.MinScheduleInterval
+func (s *balanceRegionScheduler) IsScheduleAllowed(cluster schedule.Cluster) bool {
+	limit := minUint64(s.limit, cluster.GetRegionScheduleLimit())
+	return s.limiter.OperatorCount(schedule.OpRegion) < limit
 }
 
-func (s *balanceRegionScheduler) GetResourceKind() core.ResourceKind {
-	return core.RegionKind
-}
-
-func (s *balanceRegionScheduler) GetResourceLimit() uint64 {
-	return minUint64(s.limit, s.opt.GetRegionScheduleLimit())
-}
-
-func (s *balanceRegionScheduler) Prepare(cluster schedule.Cluster) error { return nil }
-
-func (s *balanceRegionScheduler) Cleanup(cluster schedule.Cluster) {}
-
-func (s *balanceRegionScheduler) Schedule(cluster schedule.Cluster) *schedule.Operator {
+func (s *balanceRegionScheduler) Schedule(cluster schedule.Cluster, opInfluence schedule.OpInfluence) *schedule.Operator {
 	schedulerCounter.WithLabelValues(s.GetName(), "schedule").Inc()
 	// Select a peer from the store with most regions.
 	region, oldPeer := scheduleRemovePeer(cluster, s.GetName(), s.selector)
@@ -91,7 +81,7 @@ func (s *balanceRegionScheduler) Schedule(cluster schedule.Cluster) *schedule.Op
 	}
 
 	// We don't schedule region with abnormal number of replicas.
-	if len(region.GetPeers()) != s.opt.GetMaxReplicas() {
+	if len(region.GetPeers()) != cluster.GetMaxReplicas() {
 		schedulerCounter.WithLabelValues(s.GetName(), "abnormal_replica").Inc()
 		return nil
 	}
@@ -102,23 +92,24 @@ func (s *balanceRegionScheduler) Schedule(cluster schedule.Cluster) *schedule.Op
 		return nil
 	}
 
-	op := s.transferPeer(cluster, region, oldPeer)
+	op := s.transferPeer(cluster, region, oldPeer, opInfluence)
 	if op == nil {
 		// We can't transfer peer from this store now, so we add it to the cache
 		// and skip it for a while.
 		s.cache.Put(oldPeer.GetStoreId())
+		return nil
 	}
 	schedulerCounter.WithLabelValues(s.GetName(), "new_operator").Inc()
 	return op
 }
 
-func (s *balanceRegionScheduler) transferPeer(cluster schedule.Cluster, region *core.RegionInfo, oldPeer *metapb.Peer) *schedule.Operator {
+func (s *balanceRegionScheduler) transferPeer(cluster schedule.Cluster, region *core.RegionInfo, oldPeer *metapb.Peer, opInfluence schedule.OpInfluence) *schedule.Operator {
 	// scoreGuard guarantees that the distinct score will not decrease.
 	stores := cluster.GetRegionStores(region)
 	source := cluster.GetStore(oldPeer.GetStoreId())
-	scoreGuard := schedule.NewDistinctScoreFilter(s.opt.GetLocationLabels(), stores, source)
+	scoreGuard := schedule.NewDistinctScoreFilter(cluster.GetLocationLabels(), stores, source)
 
-	checker := schedule.NewReplicaChecker(s.opt, cluster, nil)
+	checker := schedule.NewReplicaChecker(cluster, nil)
 	newPeer := checker.SelectBestPeerToAddReplica(region, scoreGuard)
 	if newPeer == nil {
 		schedulerCounter.WithLabelValues(s.GetName(), "no_peer").Inc()
@@ -126,18 +117,13 @@ func (s *balanceRegionScheduler) transferPeer(cluster schedule.Cluster, region *
 	}
 
 	target := cluster.GetStore(newPeer.GetStoreId())
-	log.Debugf("[region %d] source store id is %v, target store id is %v", region.GetId(), source.GetId(), target.GetId())
-	if !shouldBalance(source, target, s.GetResourceKind()) {
+	avgScore := cluster.GetStoresAverageScore(core.RegionKind, s.selector.GetFilters()...)
+	log.Debugf("[region %d] source store id is %v, target store id is %v, average store score is %f", region.GetId(), source.GetId(), target.GetId(), avgScore)
+	if !shouldBalance(source, target, avgScore, core.RegionKind, region, opInfluence, cluster.GetTolerantSizeRatio()) {
 		schedulerCounter.WithLabelValues(s.GetName(), "skip").Inc()
 		return nil
 	}
-	s.limit = adjustBalanceLimit(cluster, s.GetResourceKind())
+	s.limit = adjustBalanceLimit(cluster, core.RegionKind)
 
-	return schedule.CreateMovePeerOperator("balance-region", region, core.RegionKind, oldPeer.GetStoreId(), newPeer.GetStoreId(), newPeer.GetId())
-}
-
-// GetCache returns interval id cache in the scheduler. This is for test only.
-// TODO: remove it after moving tests into this directory.
-func (s *balanceRegionScheduler) GetCache() *cache.TTLUint64 {
-	return s.cache
+	return schedule.CreateMovePeerOperator("balance-region", cluster, region, schedule.OpBalance, oldPeer.GetStoreId(), newPeer.GetStoreId(), newPeer.GetId())
 }

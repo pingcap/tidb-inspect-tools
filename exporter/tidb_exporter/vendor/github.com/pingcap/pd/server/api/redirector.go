@@ -19,8 +19,8 @@ import (
 	"net/url"
 	"strings"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/pingcap/pd/server"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -77,7 +77,7 @@ type customReverseProxies struct {
 
 func newCustomReverseProxies(urls []url.URL) *customReverseProxies {
 	p := &customReverseProxies{
-		client: &http.Client{},
+		client: dialClient,
 	}
 
 	p.urls = append(p.urls, urls...)

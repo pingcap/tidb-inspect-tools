@@ -13,55 +13,33 @@
 
 package core
 
+// PriorityLevel lower level means higher priority
+type PriorityLevel int
+
+// Built-in priority level
+const (
+	HighPriority PriorityLevel = iota
+	NormalPriority
+	LowPriority
+)
+
 // ResourceKind distinguishes different kinds of resources.
 type ResourceKind int
 
 const (
-	// UnKnownKind indicates the unknown kind resource
-	UnKnownKind ResourceKind = iota
-	// AdminKind indicates that specify by admin
-	AdminKind
 	// LeaderKind indicates the leader kind resource
-	LeaderKind
+	LeaderKind = iota
 	// RegionKind indicates the region kind resource
 	RegionKind
-	// PriorityKind indicates the priority kind resource
-	PriorityKind
-	// OtherKind indicates the other kind resource
-	OtherKind
 )
 
-var resourceKindToName = map[ResourceKind]string{
-	0: "unknown",
-	1: "admin",
-	2: "leader",
-	3: "region",
-	4: "priority",
-	5: "other",
-}
-
-var resourceNameToValue = map[string]ResourceKind{
-	"unknown":  UnKnownKind,
-	"admin":    AdminKind,
-	"leader":   LeaderKind,
-	"region":   RegionKind,
-	"priority": PriorityKind,
-	"other":    OtherKind,
-}
-
 func (k ResourceKind) String() string {
-	s, ok := resourceKindToName[k]
-	if ok {
-		return s
+	switch k {
+	case LeaderKind:
+		return "leader"
+	case RegionKind:
+		return "region"
+	default:
+		return "unknown"
 	}
-	return resourceKindToName[UnKnownKind]
-}
-
-// ParseResourceKind convert string to ResourceKind
-func ParseResourceKind(name string) ResourceKind {
-	k, ok := resourceNameToValue[name]
-	if ok {
-		return k
-	}
-	return UnKnownKind
 }

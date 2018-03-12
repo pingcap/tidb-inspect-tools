@@ -23,11 +23,15 @@ import (
 	"sync"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
 	"github.com/pingcap/pd/server/core"
 	"github.com/pingcap/pd/server/namespace"
+	log "github.com/sirupsen/logrus"
 )
+
+func init() {
+	namespace.RegisterClassifier("table", NewTableNamespaceClassifier)
+}
 
 // Namespace defines two things:
 // 1. relation between a Name and several tables
@@ -38,6 +42,7 @@ type Namespace struct {
 	Name     string          `json:"Name"`
 	TableIDs map[int64]bool  `json:"table_ids,omitempty"`
 	StoreIDs map[uint64]bool `json:"store_ids,omitempty"`
+	Meta     bool            `json:"meta,omitempty"`
 }
 
 // NewNamespace creates a new namespace
@@ -85,10 +90,9 @@ func (ns *Namespace) AddStoreID(storeID uint64) {
 // tableNamespaceClassifier implements Classifier interface
 type tableNamespaceClassifier struct {
 	sync.RWMutex
-	nsInfo         *namespacesInfo
-	tableIDDecoder IDDecoder
-	kv             *core.KV
-	idAlloc        core.IDAllocator
+	nsInfo  *namespacesInfo
+	kv      *core.KV
+	idAlloc core.IDAllocator
 	http.Handler
 }
 
@@ -102,10 +106,9 @@ func NewTableNamespaceClassifier(kv *core.KV, idAlloc core.IDAllocator) (namespa
 		return nil, errors.Trace(err)
 	}
 	c := &tableNamespaceClassifier{
-		nsInfo:         nsInfo,
-		tableIDDecoder: DefaultIDDecoder,
-		kv:             kv,
-		idAlloc:        idAlloc,
+		nsInfo:  nsInfo,
+		kv:      kv,
+		idAlloc: idAlloc,
 	}
 	c.Handler = newTableClassifierHandler(c)
 	return c, nil
@@ -119,6 +122,7 @@ func (c *tableNamespaceClassifier) GetAllNamespaces() []string {
 	for name := range c.nsInfo.namespaces {
 		nsList = append(nsList, name)
 	}
+	nsList = append(nsList, namespace.DefaultNamespace)
 	return nsList
 }
 
@@ -139,56 +143,19 @@ func (c *tableNamespaceClassifier) GetRegionNamespace(regionInfo *core.RegionInf
 	c.RLock()
 	defer c.RUnlock()
 
-	tableID := c.getTableID(regionInfo)
-	if tableID == 0 {
+	isMeta := Key(regionInfo.StartKey).IsMeta()
+	tableID := Key(regionInfo.StartKey).TableID()
+	if tableID == 0 && !isMeta {
 		return namespace.DefaultNamespace
 	}
 
 	for name, ns := range c.nsInfo.namespaces {
 		_, ok := ns.TableIDs[tableID]
-		if ok {
+		if ok || (isMeta && ns.Meta) {
 			return name
 		}
 	}
 	return namespace.DefaultNamespace
-}
-
-// getTableID returns the meaningful tableID (not 0) only if
-// the region contains only the contents of that table
-// else it returns 0
-func (c *tableNamespaceClassifier) getTableID(regionInfo *core.RegionInfo) int64 {
-	startTableID := c.tableIDDecoder.DecodeTableID(regionInfo.StartKey)
-	endTableID := c.tableIDDecoder.DecodeTableID(regionInfo.EndKey)
-
-	if startTableID == 0 || endTableID == 0 {
-		log.Debugf("Region %s has StartTableID (%d) or EndTableID (%d) of value 0", *regionInfo, startTableID, endTableID)
-	}
-
-	if startTableID == 0 && endTableID == 0 {
-		// The startTableID and endTableID cannot be decoded,
-		// indicating the region contains meta-info
-		return 0
-	}
-	// The [startTableID|endTableID] is 0,
-	// indicating that the region contains infinite edge
-	if startTableID == 0 {
-		return endTableID
-	}
-	if endTableID == 0 {
-		return startTableID
-	}
-
-	if startTableID == endTableID {
-		return startTableID
-	}
-
-	// The startTableID is not equal to the endTableID for regionInfo,
-	// so check whether endKey is the startKey of the next table
-	if (startTableID == endTableID-1) && IsPureTableID(regionInfo.EndKey) {
-		return startTableID
-	}
-
-	return 0
 }
 
 // GetNamespaces returns all namespace details.
@@ -196,6 +163,13 @@ func (c *tableNamespaceClassifier) GetNamespaces() []*Namespace {
 	c.RLock()
 	defer c.RUnlock()
 	return c.nsInfo.getNamespaces()
+}
+
+// GetNamespaceByName returns whether namespace exists
+func (c *tableNamespaceClassifier) IsNamespaceExist(name string) bool {
+	c.RLock()
+	defer c.RUnlock()
+	return c.nsInfo.getNamespaceByName(name) != nil
 }
 
 // CreateNamespace creates a new Namespace.
@@ -207,6 +181,10 @@ func (c *tableNamespaceClassifier) CreateNamespace(name string) error {
 	matched := r.MatchString(name)
 	if !matched {
 		return errors.New("Name should be 0-9, a-z or A-Z")
+	}
+
+	if name == namespace.DefaultNamespace {
+		return errors.Errorf("%s is reserved as default namespace", name)
 	}
 
 	if n := c.nsInfo.getNamespaceByName(name); n != nil {
@@ -256,6 +234,39 @@ func (c *tableNamespaceClassifier) RemoveNamespaceTableID(name string, tableID i
 	}
 
 	delete(n.TableIDs, tableID)
+	return c.putNamespaceLocked(n)
+}
+
+// AddMetaToNamespace adds meta to a namespace.
+func (c *tableNamespaceClassifier) AddMetaToNamespace(name string) error {
+	c.Lock()
+	defer c.Unlock()
+
+	n := c.nsInfo.getNamespaceByName(name)
+	if n == nil {
+		return errors.Errorf("invalid namespace Name %s, not found", name)
+	}
+	if c.nsInfo.IsMetaExist() {
+		return errors.New("meta is already set")
+	}
+
+	n.Meta = true
+	return c.putNamespaceLocked(n)
+}
+
+// RemoveMeta removes meta from a namespace.
+func (c *tableNamespaceClassifier) RemoveMeta(name string) error {
+	c.Lock()
+	defer c.Unlock()
+
+	n := c.nsInfo.getNamespaceByName(name)
+	if n == nil {
+		return errors.Errorf("invalid namespace Name %s, not found", name)
+	}
+	if !n.Meta {
+		return errors.Errorf("meta is not belong to %s", name)
+	}
+	n.Meta = false
 	return c.putNamespaceLocked(n)
 }
 
@@ -355,6 +366,16 @@ func (namespaceInfo *namespacesInfo) IsStoreIDExist(storeID uint64) bool {
 	for _, ns := range namespaceInfo.namespaces {
 		_, ok := ns.StoreIDs[storeID]
 		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+// IsMetaExist returns true if meta is binded to a namespace.
+func (namespaceInfo *namespacesInfo) IsMetaExist() bool {
+	for _, ns := range namespaceInfo.namespaces {
+		if ns.Meta {
 			return true
 		}
 	}

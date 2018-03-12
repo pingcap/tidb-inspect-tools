@@ -20,11 +20,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/pd/server/core"
+	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -43,16 +43,33 @@ func (s *Server) GetMembers(context.Context, *pdpb.GetMembersRequest) (*pdpb.Get
 	if err != nil {
 		return nil, grpc.Errorf(codes.Unknown, err.Error())
 	}
+	for _, m := range members {
+		leaderPriority, e := s.GetMemberLeaderPriority(m.GetMemberId())
+		if e != nil {
+			return nil, grpc.Errorf(codes.Unknown, e.Error())
+		}
+		m.LeaderPriority = int32(leaderPriority)
+	}
 
 	leader, err := s.GetLeader()
 	if err != nil {
 		return nil, grpc.Errorf(codes.Unknown, err.Error())
 	}
 
+	var etcdLeader *pdpb.Member
+	leadID := s.etcd.Server.Lead()
+	for _, m := range members {
+		if m.MemberId == leadID {
+			etcdLeader = m
+			break
+		}
+	}
+
 	return &pdpb.GetMembersResponse{
-		Header:  s.header(),
-		Members: members,
-		Leader:  leader,
+		Header:     s.header(),
+		Members:    members,
+		Leader:     leader,
+		EtcdLeader: etcdLeader,
 	}, nil
 }
 
@@ -207,6 +224,23 @@ func (s *Server) PutStore(ctx context.Context, request *pdpb.PutStoreRequest) (*
 	}, nil
 }
 
+// GetAllStores implements gRPC PDServer.
+func (s *Server) GetAllStores(ctx context.Context, request *pdpb.GetAllStoresRequest) (*pdpb.GetAllStoresResponse, error) {
+	if err := s.validateRequest(request.GetHeader()); err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	cluster := s.GetRaftCluster()
+	if cluster == nil {
+		return &pdpb.GetAllStoresResponse{Header: s.notBootstrappedHeader()}, nil
+	}
+
+	return &pdpb.GetAllStoresResponse{
+		Header: s.header(),
+		Stores: cluster.GetStores(),
+	}, nil
+}
+
 // StoreHeartbeat implements gRPC PDServer.
 func (s *Server) StoreHeartbeat(ctx context.Context, request *pdpb.StoreHeartbeatRequest) (*pdpb.StoreHeartbeatResponse, error) {
 	if err := s.validateRequest(request.GetHeader()); err != nil {
@@ -308,6 +342,7 @@ func (s *Server) RegionHeartbeat(stream pdpb.PD_RegionHeartbeatServer) error {
 		storeLabel := strconv.FormatUint(storeID, 10)
 
 		regionHeartbeatCounter.WithLabelValues(storeLabel, "report", "recv").Inc()
+		regionHeartbeatLatency.WithLabelValues(storeLabel).Observe(float64(time.Now().UnixNano()/int64(time.Millisecond)) - float64(request.GetTimestamp()))
 
 		hbStreams := cluster.coordinator.hbStreams
 
@@ -317,11 +352,7 @@ func (s *Server) RegionHeartbeat(stream pdpb.PD_RegionHeartbeatServer) error {
 			lastBind = time.Now()
 		}
 
-		region := core.NewRegionInfo(request.GetRegion(), request.GetLeader())
-		region.DownPeers = request.GetDownPeers()
-		region.PendingPeers = request.GetPendingPeers()
-		region.WrittenBytes = request.GetBytesWritten()
-		region.ReadBytes = request.GetBytesRead()
+		region := core.RegionFromHeartbeat(request)
 		if region.GetId() == 0 {
 			msg := fmt.Sprintf("invalid request region, %v", request)
 			hbStreams.sendErr(region, pdpb.ErrorType_UNKNOWN, msg, storeLabel)
@@ -462,6 +493,35 @@ func (s *Server) PutClusterConfig(ctx context.Context, request *pdpb.PutClusterC
 	log.Infof("put cluster config ok - %v", conf)
 
 	return &pdpb.PutClusterConfigResponse{
+		Header: s.header(),
+	}, nil
+}
+
+// ScatterRegion implements gRPC PDServer.
+func (s *Server) ScatterRegion(ctx context.Context, request *pdpb.ScatterRegionRequest) (*pdpb.ScatterRegionResponse, error) {
+	if err := s.validateRequest(request.GetHeader()); err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	cluster := s.GetRaftCluster()
+	if cluster == nil {
+		return &pdpb.ScatterRegionResponse{Header: s.notBootstrappedHeader()}, nil
+	}
+
+	region := cluster.GetRegionInfoByID(request.GetRegionId())
+	if region == nil {
+		if request.GetRegion() == nil {
+			return nil, errors.Errorf("region %d not found", request.GetRegionId())
+		}
+		region = core.NewRegionInfo(request.GetRegion(), request.GetLeader())
+	}
+
+	co := cluster.coordinator
+	if op := co.regionScatterer.Scatter(region); op != nil {
+		co.addOperator(op)
+	}
+
+	return &pdpb.ScatterRegionResponse{
 		Header: s.header(),
 	}, nil
 }

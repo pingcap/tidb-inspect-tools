@@ -14,14 +14,15 @@
 package core
 
 import (
+	"math"
 	"strings"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/gogo/protobuf/proto"
 	"github.com/juju/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	log "github.com/sirupsen/logrus"
 )
 
 // StoreInfo contains information about a store.
@@ -29,12 +30,15 @@ type StoreInfo struct {
 	*metapb.Store
 	Stats *pdpb.StoreStats
 	// Blocked means that the store is blocked from balance.
-	blocked         bool
-	LeaderCount     int
-	RegionCount     int
-	LastHeartbeatTS time.Time
-	LeaderWeight    float64
-	RegionWeight    float64
+	blocked          bool
+	LeaderCount      int
+	RegionCount      int
+	LeaderSize       int64
+	RegionSize       int64
+	PendingPeerCount int
+	LastHeartbeatTS  time.Time
+	LeaderWeight     float64
+	RegionWeight     float64
 }
 
 // NewStoreInfo creates StoreInfo with meta data.
@@ -49,14 +53,17 @@ func NewStoreInfo(store *metapb.Store) *StoreInfo {
 // Clone creates a copy of current StoreInfo.
 func (s *StoreInfo) Clone() *StoreInfo {
 	return &StoreInfo{
-		Store:           proto.Clone(s.Store).(*metapb.Store),
-		Stats:           proto.Clone(s.Stats).(*pdpb.StoreStats),
-		blocked:         s.blocked,
-		LeaderCount:     s.LeaderCount,
-		RegionCount:     s.RegionCount,
-		LastHeartbeatTS: s.LastHeartbeatTS,
-		LeaderWeight:    s.LeaderWeight,
-		RegionWeight:    s.RegionWeight,
+		Store:            proto.Clone(s.Store).(*metapb.Store),
+		Stats:            proto.Clone(s.Stats).(*pdpb.StoreStats),
+		blocked:          s.blocked,
+		LeaderCount:      s.LeaderCount,
+		RegionCount:      s.RegionCount,
+		LeaderSize:       s.LeaderSize,
+		RegionSize:       s.RegionSize,
+		PendingPeerCount: s.PendingPeerCount,
+		LastHeartbeatTS:  s.LastHeartbeatTS,
+		LeaderWeight:     s.LeaderWeight,
+		RegionWeight:     s.RegionWeight,
 	}
 }
 
@@ -95,30 +102,24 @@ func (s *StoreInfo) DownTime() time.Duration {
 	return time.Since(s.LastHeartbeatTS)
 }
 
-func (s *StoreInfo) leaderCount() uint64 {
-	return uint64(s.LeaderCount)
-}
-
 const minWeight = 1e-6
 
 // LeaderScore returns the store's leader score: leaderCount / leaderWeight.
 func (s *StoreInfo) LeaderScore() float64 {
+	size := math.Max(1, float64(s.LeaderSize))
 	if s.LeaderWeight <= 0 {
-		return float64(s.LeaderCount) / minWeight
+		return size / minWeight
 	}
-	return float64(s.LeaderCount) / s.LeaderWeight
+	return size / s.LeaderWeight
 }
 
-func (s *StoreInfo) regionCount() uint64 {
-	return uint64(s.RegionCount)
-}
-
-// RegionScore returns the store's region score: regionCount / regionWeight.
+// RegionScore returns the store's region score: regionSize / regionWeight.
 func (s *StoreInfo) RegionScore() float64 {
+	size := math.Max(1, float64(s.RegionSize))
 	if s.RegionWeight <= 0 {
-		return float64(s.RegionCount) / minWeight
+		return size / minWeight
 	}
-	return float64(s.RegionCount) / s.RegionWeight
+	return size / s.RegionWeight
 }
 
 // StorageSize returns store's used storage size reported from tikv.
@@ -138,16 +139,28 @@ const storeLowSpaceThreshold = 0.2
 
 // IsLowSpace checks if the store is lack of space.
 func (s *StoreInfo) IsLowSpace() bool {
-	return s.AvailableRatio() < storeLowSpaceThreshold
+	return s.Stats != nil && s.AvailableRatio() < storeLowSpaceThreshold
 }
 
 // ResourceCount reutrns count of leader/region in the store.
 func (s *StoreInfo) ResourceCount(kind ResourceKind) uint64 {
 	switch kind {
 	case LeaderKind:
-		return s.leaderCount()
+		return uint64(s.LeaderCount)
 	case RegionKind:
-		return s.regionCount()
+		return uint64(s.RegionCount)
+	default:
+		return 0
+	}
+}
+
+// ResourceSize returns size of leader/region in the store
+func (s *StoreInfo) ResourceSize(kind ResourceKind) int64 {
+	switch kind {
+	case LeaderKind:
+		return s.LeaderSize
+	case RegionKind:
+		return s.RegionSize
 	default:
 		return 0
 	}
@@ -160,6 +173,24 @@ func (s *StoreInfo) ResourceScore(kind ResourceKind) float64 {
 		return s.LeaderScore()
 	case RegionKind:
 		return s.RegionScore()
+	default:
+		return 0
+	}
+}
+
+// ResourceWeight returns weight of leader/region in the score
+func (s *StoreInfo) ResourceWeight(kind ResourceKind) float64 {
+	switch kind {
+	case LeaderKind:
+		if s.LeaderWeight <= 0 {
+			return minWeight
+		}
+		return s.LeaderWeight
+	case RegionKind:
+		if s.RegionWeight <= 0 {
+			return minWeight
+		}
+		return s.RegionWeight
 	default:
 		return 0
 	}
@@ -179,16 +210,24 @@ func (s *StoreInfo) GetUptime() time.Duration {
 	return 0
 }
 
-// If a store's last heartbeat is storeDisconnectDuration ago, the store will
-// be marked as disconnected state. The value should be greater than tikv's
-// store heartbeat interval (default 10s).
-var storeDisconnectDuration = 20 * time.Second
+var (
+	// If a store's last heartbeat is storeDisconnectDuration ago, the store will
+	// be marked as disconnected state. The value should be greater than tikv's
+	// store heartbeat interval (default 10s).
+	storeDisconnectDuration = 20 * time.Second
+	storeUnhealthDuration   = 10 * time.Minute
+)
 
 // IsDisconnected checks if a store is disconnected, which means PD misses
 // tikv's store heartbeat for a short time, maybe caused by process restart or
 // temporary network failure.
 func (s *StoreInfo) IsDisconnected() bool {
 	return s.DownTime() > storeDisconnectDuration
+}
+
+// IsUnhealth checks if a store is unhealth.
+func (s *StoreInfo) IsUnhealth() bool {
+	return s.DownTime() > storeUnhealthDuration
 }
 
 // GetLabelValue returns a label's value (if exists).
@@ -332,6 +371,27 @@ func (s *StoresInfo) SetLeaderCount(storeID uint64, leaderCount int) {
 func (s *StoresInfo) SetRegionCount(storeID uint64, regionCount int) {
 	if store, ok := s.stores[storeID]; ok {
 		store.RegionCount = regionCount
+	}
+}
+
+// SetPendingPeerCount sets the pengding count to a storeInfo
+func (s *StoresInfo) SetPendingPeerCount(storeID uint64, pendingPeerCount int) {
+	if store, ok := s.stores[storeID]; ok {
+		store.PendingPeerCount = pendingPeerCount
+	}
+}
+
+// SetLeaderSize set the leader count to a storeInfo
+func (s *StoresInfo) SetLeaderSize(storeID uint64, leaderSize int64) {
+	if store, ok := s.stores[storeID]; ok {
+		store.LeaderSize = leaderSize
+	}
+}
+
+// SetRegionSize set the region count to a storeInfo
+func (s *StoresInfo) SetRegionSize(storeID uint64, regionSize int64) {
+	if store, ok := s.stores[storeID]; ok {
+		store.RegionSize = regionSize
 	}
 }
 

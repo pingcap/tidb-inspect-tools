@@ -21,7 +21,7 @@ import (
 	"github.com/pingcap/pd/server/schedule"
 )
 
-// namespaceCluster is part of a global cluster that contains stores and reigons
+// namespaceCluster is part of a global cluster that contains stores and regions
 // within a specific namespace.
 type namespaceCluster struct {
 	schedule.Cluster
@@ -122,13 +122,29 @@ func (c *namespaceCluster) RegionWriteStats() []*core.RegionStat {
 	return stats
 }
 
-func scheduleByNamespace(cluster schedule.Cluster, classifier namespace.Classifier, scheduler schedule.Scheduler) *schedule.Operator {
+func scheduleByNamespace(cluster schedule.Cluster, classifier namespace.Classifier, scheduler schedule.Scheduler, opInfluence schedule.OpInfluence) *schedule.Operator {
 	namespaces := classifier.GetAllNamespaces()
 	for _, i := range rand.Perm(len(namespaces)) {
 		nc := newNamespaceCluster(cluster, classifier, namespaces[i])
-		if op := scheduler.Schedule(nc); op != nil {
+		if op := scheduler.Schedule(nc, opInfluence); op != nil {
 			return op
 		}
 	}
 	return nil
+}
+
+func (c *namespaceCluster) GetLeaderScheduleLimit() uint64 {
+	return c.GetOpt().GetLeaderScheduleLimit(c.namespace)
+}
+
+func (c *namespaceCluster) GetRegionScheduleLimit() uint64 {
+	return c.GetOpt().GetRegionScheduleLimit(c.namespace)
+}
+
+func (c *namespaceCluster) GetReplicaScheduleLimit() uint64 {
+	return c.GetOpt().GetReplicaScheduleLimit(c.namespace)
+}
+
+func (c *namespaceCluster) GetMaxReplicas() int {
+	return c.GetOpt().GetMaxReplicas(c.namespace)
 }

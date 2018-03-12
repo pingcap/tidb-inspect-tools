@@ -78,7 +78,7 @@ func (s *testLeaderChangeSuite) TestLeaderConfigChange(c *C) {
 	svrs, endpoints, closeFunc := s.prepareClusterN(c, 3)
 	defer closeFunc()
 
-	cli, err := NewClient(endpoints)
+	cli, err := NewClient(endpoints, SecurityOption{})
 	c.Assert(err, IsNil)
 	defer cli.Close()
 
@@ -96,7 +96,7 @@ func (s *testLeaderChangeSuite) TestLeaderConfigChange(c *C) {
 		if newLeader != leader {
 			s.verifyLeader(c, cli.(*client), newLeader)
 			changed = true
-			nr := svrs[newLeader].GetConfig().Replication.MaxReplicas
+			nr := svrs[newLeader].GetReplicationConfig().MaxReplicas
 			c.Assert(nr, Equals, uint64(5))
 			break
 		}
@@ -109,7 +109,7 @@ func (s *testLeaderChangeSuite) TestMemberList(c *C) {
 	_, endpoints, closeFunc := s.prepareClusterN(c, 2)
 	defer closeFunc()
 
-	cli, err := NewClient(endpoints[:1])
+	cli, err := NewClient(endpoints[:1], SecurityOption{})
 	c.Assert(err, IsNil)
 	cli.Close()
 
@@ -122,7 +122,7 @@ func (s *testLeaderChangeSuite) TestLeaderChange(c *C) {
 	svrs, endpoints, closeFunc := s.prepareClusterN(c, 3)
 	defer closeFunc()
 
-	cli, err := NewClient(endpoints)
+	cli, err := NewClient(endpoints, SecurityOption{})
 	c.Assert(err, IsNil)
 	defer cli.Close()
 
@@ -163,7 +163,7 @@ func (s *testLeaderChangeSuite) TestLeaderTransfer(c *C) {
 	servers, endpoints, closeFunc := s.prepareClusterN(c, 2)
 	defer closeFunc()
 
-	cli, err := NewClient(endpoints)
+	cli, err := NewClient(endpoints, SecurityOption{})
 	c.Assert(err, IsNil)
 	defer cli.Close()
 
@@ -229,10 +229,10 @@ func (s *testLeaderChangeSuite) mustGetLeader(c *C, cli *client, urls []string) 
 }
 
 func (s *testLeaderChangeSuite) verifyLeader(c *C, cli *client, leader string) {
-	cli.scheduleCheckLeader()
-	time.Sleep(time.Millisecond * 500)
-
-	cli.connMu.RLock()
-	defer cli.connMu.RUnlock()
-	c.Assert(cli.connMu.leader, Equals, leader)
+	testutil.WaitUntil(c, func(c *C) bool {
+		cli.scheduleCheckLeader()
+		cli.connMu.RLock()
+		defer cli.connMu.RUnlock()
+		return cli.connMu.leader == leader
+	})
 }

@@ -15,18 +15,17 @@ package server
 
 import (
 	"fmt"
-	"math"
 	"path"
 	"sync"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
-	"github.com/coreos/etcd/clientv3"
 	"github.com/juju/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pingcap/pd/pkg/logutil"
 	"github.com/pingcap/pd/server/core"
 	"github.com/pingcap/pd/server/namespace"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -102,7 +101,7 @@ func (c *RaftCluster) start() error {
 		return nil
 	}
 
-	cluster, err := loadClusterInfo(c.s.idAlloc, c.s.kv)
+	cluster, err := loadClusterInfo(c.s.idAlloc, c.s.kv, c.s.scheduleOpt)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -110,7 +109,8 @@ func (c *RaftCluster) start() error {
 		return nil
 	}
 	c.cachedCluster = cluster
-	c.coordinator = newCoordinator(c.cachedCluster, c.s.scheduleOpt, c.s.hbStreams, c.s.kv, c.s.classifier)
+	c.coordinator = newCoordinator(c.cachedCluster, c.s.hbStreams, c.s.classifier)
+	c.cachedCluster.regionStats = newRegionStatistics(c.s.scheduleOpt, c.s.classifier)
 	c.quit = make(chan struct{})
 
 	c.wg.Add(2)
@@ -123,6 +123,8 @@ func (c *RaftCluster) start() error {
 }
 
 func (c *RaftCluster) runCoordinator() {
+	defer logutil.LogPanic()
+
 	c.coordinator.run()
 	c.wg.Done()
 }
@@ -147,84 +149,6 @@ func (c *RaftCluster) isRunning() bool {
 	defer c.RUnlock()
 
 	return c.running
-}
-
-// GetConfig gets the config information.
-func (s *Server) GetConfig() *Config {
-	cfg := s.cfg.clone()
-	cfg.Schedule = *s.scheduleOpt.load()
-	cfg.Replication = *s.scheduleOpt.rep.load()
-	return cfg
-}
-
-// GetScheduleConfig gets the balance config information.
-func (s *Server) GetScheduleConfig() *ScheduleConfig {
-	cfg := &ScheduleConfig{}
-	*cfg = *s.scheduleOpt.load()
-	return cfg
-}
-
-// SetScheduleConfig sets the balance config information.
-func (s *Server) SetScheduleConfig(cfg ScheduleConfig) {
-	s.scheduleOpt.store(&cfg)
-	s.scheduleOpt.persist(s.kv)
-	s.cfg.Schedule = cfg
-	log.Infof("schedule config is updated: %+v, old: %+v", cfg, s.cfg.Schedule)
-}
-
-// GetReplicationConfig get the replication config
-func (s *Server) GetReplicationConfig() *ReplicationConfig {
-	cfg := &ReplicationConfig{}
-	*cfg = *s.scheduleOpt.rep.load()
-	return cfg
-}
-
-// SetReplicationConfig sets the replication config
-func (s *Server) SetReplicationConfig(cfg ReplicationConfig) {
-	s.scheduleOpt.rep.store(&cfg)
-	s.scheduleOpt.persist(s.kv)
-	s.cfg.Replication = cfg
-	log.Infof("replication is updated: %+v, old: %+v", cfg, s.cfg.Replication)
-}
-
-func (s *Server) getClusterRootPath() string {
-	return path.Join(s.rootPath, "raft")
-}
-
-// GetRaftCluster gets raft cluster.
-// If cluster has not been bootstrapped, return nil.
-func (s *Server) GetRaftCluster() *RaftCluster {
-	if s.isClosed() || !s.cluster.isRunning() {
-		return nil
-	}
-	return s.cluster
-}
-
-// GetCluster gets cluster
-func (s *Server) GetCluster() *metapb.Cluster {
-	return &metapb.Cluster{
-		Id:           s.clusterID,
-		MaxPeerCount: uint32(s.cfg.Replication.MaxReplicas),
-	}
-}
-
-// GetClusterStatus gets cluster status
-func (s *Server) GetClusterStatus() (*ClusterStatus, error) {
-	s.cluster.Lock()
-	defer s.cluster.Unlock()
-	return s.cluster.loadClusterStatus()
-}
-
-func (s *Server) createRaftCluster() error {
-	if s.cluster.isRunning() {
-		return nil
-	}
-
-	return s.cluster.start()
-}
-
-func (s *Server) stopRaftCluster() {
-	s.cluster.stop()
 }
 
 func makeStoreKey(clusterRootPath string, storeID uint64) string {
@@ -279,75 +203,6 @@ func checkBootstrapRequest(clusterID uint64, req *pdpb.BootstrapRequest) error {
 	return nil
 }
 
-func (s *Server) bootstrapCluster(req *pdpb.BootstrapRequest) (*pdpb.BootstrapResponse, error) {
-	clusterID := s.clusterID
-
-	log.Infof("try to bootstrap raft cluster %d with %v", clusterID, req)
-
-	if err := checkBootstrapRequest(clusterID, req); err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	clusterMeta := metapb.Cluster{
-		Id:           clusterID,
-		MaxPeerCount: uint32(s.cfg.Replication.MaxReplicas),
-	}
-
-	// Set cluster meta
-	clusterValue, err := clusterMeta.Marshal()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	clusterRootPath := s.getClusterRootPath()
-
-	var ops []clientv3.Op
-	ops = append(ops, clientv3.OpPut(clusterRootPath, string(clusterValue)))
-
-	// Set bootstrap time
-	bootstrapKey := makeBootstrapTimeKey(clusterRootPath)
-	nano := time.Now().UnixNano()
-
-	timeData := uint64ToBytes(uint64(nano))
-	ops = append(ops, clientv3.OpPut(bootstrapKey, string(timeData)))
-
-	// Set store meta
-	storeMeta := req.GetStore()
-	storePath := makeStoreKey(clusterRootPath, storeMeta.GetId())
-	storeValue, err := storeMeta.Marshal()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	ops = append(ops, clientv3.OpPut(storePath, string(storeValue)))
-
-	regionValue, err := req.GetRegion().Marshal()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	// Set region meta with region id.
-	regionPath := makeRegionKey(clusterRootPath, req.GetRegion().GetId())
-	ops = append(ops, clientv3.OpPut(regionPath, string(regionValue)))
-
-	// TODO: we must figure out a better way to handle bootstrap failed, maybe intervene manually.
-	bootstrapCmp := clientv3.Compare(clientv3.CreateRevision(clusterRootPath), "=", 0)
-	resp, err := s.txn().If(bootstrapCmp).Then(ops...).Commit()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	if !resp.Succeeded {
-		log.Warnf("cluster %d already bootstrapped", clusterID)
-		return nil, errors.Errorf("cluster %d already bootstrapped", clusterID)
-	}
-
-	log.Infof("bootstrap cluster %d ok", clusterID)
-
-	if err := s.cluster.start(); err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	return &pdpb.BootstrapResponse{}, nil
-}
-
 // GetRegionByKey gets region and leader peer by region key from cluster.
 func (c *RaftCluster) GetRegionByKey(regionKey []byte) (*metapb.Region, *metapb.Peer) {
 	region := c.cachedCluster.searchRegion(regionKey)
@@ -376,9 +231,24 @@ func (c *RaftCluster) GetRegionInfoByID(regionID uint64) *core.RegionInfo {
 	return c.cachedCluster.GetRegion(regionID)
 }
 
-// GetRegions gets regions from cluster.
-func (c *RaftCluster) GetRegions() []*metapb.Region {
+// GetMetaRegions gets regions from cluster.
+func (c *RaftCluster) GetMetaRegions() []*metapb.Region {
 	return c.cachedCluster.getMetaRegions()
+}
+
+// GetRegions returns all regions info in detail.
+func (c *RaftCluster) GetRegions() []*core.RegionInfo {
+	return c.cachedCluster.getRegions()
+}
+
+// GetRegionStats returns region statistics from cluster.
+func (c *RaftCluster) GetRegionStats(startKey, endKey []byte) *core.RegionStats {
+	return c.cachedCluster.getRegionStats(startKey, endKey)
+}
+
+// DropCacheRegion removes a region from the cache.
+func (c *RaftCluster) DropCacheRegion(id uint64) {
+	c.cachedCluster.dropRegion(id)
 }
 
 // GetStores gets stores from cluster.
@@ -444,7 +314,7 @@ func (c *RaftCluster) putStore(store *metapb.Store) error {
 	}
 
 	// Check location labels.
-	for _, k := range c.s.cfg.Replication.LocationLabels {
+	for _, k := range c.cachedCluster.GetLocationLabels() {
 		if v := s.GetLabelValue(k); len(v) == 0 {
 			log.Warnf("missing location label %q in store %v", k, s)
 		}
@@ -585,74 +455,19 @@ func (c *RaftCluster) storeIsEmpty(storeID uint64) bool {
 
 func (c *RaftCluster) collectMetrics() {
 	cluster := c.cachedCluster
-
-	storeUpCount := 0
-	storeDisconnectedCount := 0
-	storeDownCount := 0
-	storeOfflineCount := 0
-	storeTombstoneCount := 0
-	storeLowSpaceCount := 0
-	storageSize := uint64(0)
-	storageCapacity := uint64(0)
-	minLeaderScore, maxLeaderScore := math.MaxFloat64, float64(0.0)
-	minRegionScore, maxRegionScore := math.MaxFloat64, float64(0.0)
-
+	statsMap := newStoreStatisticsMap(c.cachedCluster.opt, c.GetNamespaceClassifier())
 	for _, s := range cluster.GetStores() {
-		// Store state.
-		switch s.GetState() {
-		case metapb.StoreState_Up:
-			if s.DownTime() >= c.coordinator.opt.GetMaxStoreDownTime() {
-				storeDownCount++
-			} else if s.IsDisconnected() {
-				storeDisconnectedCount++
-			} else {
-				storeUpCount++
-			}
-		case metapb.StoreState_Offline:
-			storeOfflineCount++
-		case metapb.StoreState_Tombstone:
-			storeTombstoneCount++
-		}
-		if s.IsTombstone() {
-			continue
-		}
-		if s.IsLowSpace() {
-			storeLowSpaceCount++
-		}
-
-		// Store stats.
-		storageSize += s.StorageSize()
-		storageCapacity += s.Stats.GetCapacity()
-
-		// Balance score.
-		minLeaderScore = math.Min(minLeaderScore, s.LeaderScore())
-		maxLeaderScore = math.Max(maxLeaderScore, s.LeaderScore())
-		minRegionScore = math.Min(minRegionScore, s.RegionScore())
-		maxRegionScore = math.Max(maxRegionScore, s.RegionScore())
+		statsMap.Observe(s)
 	}
-
-	metrics := make(map[string]float64)
-	metrics["store_up_count"] = float64(storeUpCount)
-	metrics["store_disconnected_count"] = float64(storeDisconnectedCount)
-	metrics["store_down_count"] = float64(storeDownCount)
-	metrics["store_offline_count"] = float64(storeOfflineCount)
-	metrics["store_tombstone_count"] = float64(storeTombstoneCount)
-	metrics["store_low_space_count"] = float64(storeLowSpaceCount)
-	metrics["region_count"] = float64(cluster.getRegionCount())
-	metrics["storage_size"] = float64(storageSize)
-	metrics["storage_capacity"] = float64(storageCapacity)
-	metrics["leader_balance_ratio"] = 1 - minLeaderScore/maxLeaderScore
-	metrics["region_balance_ratio"] = 1 - minRegionScore/maxRegionScore
-
-	for label, value := range metrics {
-		clusterStatusGauge.WithLabelValues(label).Set(value)
-	}
+	statsMap.Collect()
 
 	c.coordinator.collectSchedulerMetrics()
 	c.coordinator.collectHotSpotMetrics()
+	cluster.collectMetrics()
 }
 
 func (c *RaftCluster) runBackgroundJobs(interval time.Duration) {
+	defer logutil.LogPanic()
 	defer c.wg.Done()
 
 	ticker := time.NewTicker(interval)
@@ -665,6 +480,7 @@ func (c *RaftCluster) runBackgroundJobs(interval time.Duration) {
 		case <-ticker.C:
 			c.checkStores()
 			c.collectMetrics()
+			c.coordinator.pruneHistory()
 		}
 	}
 }

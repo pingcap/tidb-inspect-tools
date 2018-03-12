@@ -14,37 +14,37 @@
 package schedulers
 
 import (
-	"time"
-
-	log "github.com/Sirupsen/logrus"
 	"github.com/pingcap/pd/server/core"
 	"github.com/pingcap/pd/server/schedule"
+	log "github.com/sirupsen/logrus"
 )
 
 func init() {
-	schedule.RegisterScheduler("balance-leader", func(opt schedule.Options, args []string) (schedule.Scheduler, error) {
-		return newBalanceLeaderScheduler(opt), nil
+	schedule.RegisterScheduler("balance-leader", func(limiter *schedule.Limiter, args []string) (schedule.Scheduler, error) {
+		return newBalanceLeaderScheduler(limiter), nil
 	})
 }
 
 type balanceLeaderScheduler struct {
-	opt      schedule.Options
+	*baseScheduler
 	limit    uint64
 	selector schedule.Selector
 }
 
 // newBalanceLeaderScheduler creates a scheduler that tends to keep leaders on
 // each store balanced.
-func newBalanceLeaderScheduler(opt schedule.Options) schedule.Scheduler {
+func newBalanceLeaderScheduler(limiter *schedule.Limiter) schedule.Scheduler {
 	filters := []schedule.Filter{
 		schedule.NewBlockFilter(),
-		schedule.NewStateFilter(opt),
-		schedule.NewHealthFilter(opt),
+		schedule.NewStateFilter(),
+		schedule.NewHealthFilter(),
+		schedule.NewRejectLeaderFilter(),
 	}
+	base := newBaseScheduler(limiter)
 	return &balanceLeaderScheduler{
-		opt:      opt,
-		limit:    1,
-		selector: schedule.NewBalanceSelector(core.LeaderKind, filters),
+		baseScheduler: base,
+		limit:         1,
+		selector:      schedule.NewBalanceSelector(core.LeaderKind, filters),
 	}
 }
 
@@ -56,23 +56,12 @@ func (l *balanceLeaderScheduler) GetType() string {
 	return "balance-leader"
 }
 
-func (l *balanceLeaderScheduler) GetInterval() time.Duration {
-	return schedule.MinScheduleInterval
+func (l *balanceLeaderScheduler) IsScheduleAllowed(cluster schedule.Cluster) bool {
+	limit := minUint64(l.limit, cluster.GetLeaderScheduleLimit())
+	return l.limiter.OperatorCount(schedule.OpLeader) < limit
 }
 
-func (l *balanceLeaderScheduler) GetResourceKind() core.ResourceKind {
-	return core.LeaderKind
-}
-
-func (l *balanceLeaderScheduler) GetResourceLimit() uint64 {
-	return minUint64(l.limit, l.opt.GetLeaderScheduleLimit())
-}
-
-func (l *balanceLeaderScheduler) Prepare(cluster schedule.Cluster) error { return nil }
-
-func (l *balanceLeaderScheduler) Cleanup(cluster schedule.Cluster) {}
-
-func (l *balanceLeaderScheduler) Schedule(cluster schedule.Cluster) *schedule.Operator {
+func (l *balanceLeaderScheduler) Schedule(cluster schedule.Cluster, opInfluence schedule.OpInfluence) *schedule.Operator {
 	schedulerCounter.WithLabelValues(l.GetName(), "schedule").Inc()
 	region, newLeader := scheduleTransferLeader(cluster, l.GetName(), l.selector)
 	if region == nil {
@@ -87,13 +76,14 @@ func (l *balanceLeaderScheduler) Schedule(cluster schedule.Cluster) *schedule.Op
 
 	source := cluster.GetStore(region.Leader.GetStoreId())
 	target := cluster.GetStore(newLeader.GetStoreId())
-	log.Debugf("[region %d] source store id is %v, target store id is %v", region.GetId(), source.GetId(), target.GetId())
-	if !shouldBalance(source, target, l.GetResourceKind()) {
+	avgScore := cluster.GetStoresAverageScore(core.LeaderKind, l.selector.GetFilters()...)
+	log.Debugf("[region %d] source store id is %v, target store id is %v, average store score is %f", region.GetId(), source.GetId(), target.GetId(), avgScore)
+	if !shouldBalance(source, target, avgScore, core.LeaderKind, region, opInfluence, cluster.GetTolerantSizeRatio()) {
 		schedulerCounter.WithLabelValues(l.GetName(), "skip").Inc()
 		return nil
 	}
-	l.limit = adjustBalanceLimit(cluster, l.GetResourceKind())
-	schedulerCounter.WithLabelValues(l.GetName(), "new_opeartor").Inc()
+	l.limit = adjustBalanceLimit(cluster, core.LeaderKind)
+	schedulerCounter.WithLabelValues(l.GetName(), "new_operator").Inc()
 	step := schedule.TransferLeader{FromStore: region.Leader.GetStoreId(), ToStore: newLeader.GetStoreId()}
-	return schedule.NewOperator("balance-leader", region.GetId(), core.LeaderKind, step)
+	return schedule.NewOperator("balance-leader", region.GetId(), schedule.OpBalance|schedule.OpLeader, step)
 }

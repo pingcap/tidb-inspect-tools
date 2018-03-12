@@ -22,15 +22,16 @@ import (
 )
 
 const (
-	namespacePrefix      = "pd/api/v1/classifier/table/namespaces"
+	namespacesPrefix     = "pd/api/v1/classifier/table/namespaces"
 	namespaceTablePrefix = "pd/api/v1/classifier/table/namespaces/table"
+	namespaceMetaPrefix  = "pd/api/v1/classifier/table/namespaces/meta"
 	storeNsPrefix        = "pd/api/v1/classifier/table/store_ns/%s"
 )
 
 // NewTableNamespaceCommand return a table namespace sub-command of rootCmd
 func NewTableNamespaceCommand() *cobra.Command {
 	s := &cobra.Command{
-		Use:   "table_ns [create|add|remove|set_store|rm_store]",
+		Use:   "table_ns [create|add|remove|set_store|rm_store|set_meta|rm_meta]",
 		Short: "show the table namespace information",
 		Run:   showNamespaceCommandFunc,
 	}
@@ -39,6 +40,8 @@ func NewTableNamespaceCommand() *cobra.Command {
 	s.AddCommand(NewRemoveTableIDCommand())
 	s.AddCommand(NewSetNamespaceStoreCommand())
 	s.AddCommand(NewRemoveNamespaceStoreCommand())
+	s.AddCommand(newSetMetaNamespaceCommand())
+	s.AddCommand(newRemoveMetaNamespaceCommand())
 	return s
 }
 
@@ -73,7 +76,7 @@ func NewRemoveTableIDCommand() *cobra.Command {
 }
 
 func showNamespaceCommandFunc(cmd *cobra.Command, args []string) {
-	r, err := doRequest(cmd, namespacePrefix, http.MethodGet)
+	r, err := doRequest(cmd, namespacesPrefix, http.MethodGet)
 	if err != nil {
 		fmt.Printf("Failed to get the namespace information: %s\n", err)
 		return
@@ -91,7 +94,7 @@ func createNamespaceCommandFunc(cmd *cobra.Command, args []string) {
 		"namespace": args[0],
 	}
 
-	postJSON(cmd, namespacePrefix, input)
+	postJSON(cmd, namespacesPrefix, input)
 }
 
 func addTableCommandFunc(cmd *cobra.Command, args []string) {
@@ -186,4 +189,44 @@ func removeNamespaceStoreCommandFunc(cmd *cobra.Command, args []string) {
 		"namespace": args[1],
 		"action":    "remove",
 	})
+}
+
+func newSetMetaNamespaceCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "set_meta <namespace>",
+		Short: "set meta to namespace",
+		Run:   setMetaNamespaceCommandFunc,
+	}
+}
+
+func newRemoveMetaNamespaceCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rm_meta <namespace>",
+		Short: "remove meta from namespace",
+		Run:   removeMetaNamespaceCommandFunc,
+	}
+}
+
+func setMetaNamespaceCommandFunc(cmd *cobra.Command, args []string) {
+	if len(args) != 1 {
+		fmt.Println("Usage: set_meta <namespace>")
+		return
+	}
+	input := map[string]interface{}{
+		"namespace": args[0],
+		"action":    "add",
+	}
+	postJSON(cmd, namespaceMetaPrefix, input)
+}
+
+func removeMetaNamespaceCommandFunc(cmd *cobra.Command, args []string) {
+	if len(args) != 1 {
+		fmt.Println("Usage: rm_meta <namespace>")
+		return
+	}
+	input := map[string]interface{}{
+		"namespace": args[0],
+		"action":    "remove",
+	}
+	postJSON(cmd, namespaceMetaPrefix, input)
 }

@@ -14,22 +14,21 @@
 package server
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"net/url"
-	"reflect"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/coreos/etcd/embed"
+	"github.com/coreos/etcd/pkg/transport"
 	"github.com/juju/errors"
 	"github.com/pingcap/pd/pkg/logutil"
 	"github.com/pingcap/pd/pkg/metricutil"
 	"github.com/pingcap/pd/pkg/typeutil"
-	"github.com/pingcap/pd/server/core"
-	"github.com/pingcap/pd/server/schedule"
+	"github.com/pingcap/pd/server/namespace"
 )
 
 // Config is the pd server configuration.
@@ -74,6 +73,8 @@ type Config struct {
 
 	Replication ReplicationConfig `toml:"replication" json:"replication"`
 
+	Namespace map[string]NamespaceConfig `json:"namespace"`
+
 	// QuotaBackendBytes Raise alarms when backend size exceeds the given quota. 0 means use the default quota.
 	// the default size is 2GB, the maximum is 8GB.
 	QuotaBackendBytes typeutil.ByteSize `toml:"quota-backend-bytes" json:"quota-backend-bytes"`
@@ -86,19 +87,26 @@ type Config struct {
 	// ElectionInterval is the interval for etcd Raft election.
 	ElectionInterval typeutil.Duration `toml:"election-interval"`
 
+	Security SecurityConfig `toml:"security" json:"security"`
+
+	LabelProperty LabelPropertyConfig `toml:"label-property" json:"label-property"`
+
 	configFile string
 
 	// For all warnings during parsing.
 	WarningMsgs []string
 
-	// Enable namespace isolation.
-	EnableNamespace bool `toml:"enable-namespace" json:"enable-namespace"`
+	// NamespaceClassifier is for classifying stores/regions into different
+	// namespaces.
+	NamespaceClassifier string `toml:"namespace-classifier" json:"namespace-classifier"`
 
 	// Only test can change them.
 	nextRetryDelay             time.Duration
 	disableStrictReconfigCheck bool
 
 	heartbeatStreamBindInterval typeutil.Duration
+
+	leaderPriorityCheckInterval typeutil.Duration
 }
 
 // NewConfig creates a new config.
@@ -124,7 +132,13 @@ func NewConfig() *Config {
 	fs.StringVar(&cfg.Log.Level, "L", "", "log level: debug, info, warn, error, fatal (default 'info')")
 	fs.StringVar(&cfg.Log.File.Filename, "log-file", "", "log file path")
 	fs.BoolVar(&cfg.Log.File.LogRotate, "log-rotate", true, "rotate log")
-	fs.BoolVar(&cfg.EnableNamespace, "enable-namespace", false, "enable namespace isolation (default 'false')")
+	fs.StringVar(&cfg.NamespaceClassifier, "namespace-classifier", "default", "namespace classifier (default 'default')")
+
+	fs.StringVar(&cfg.Security.CAPath, "cacert", "", "Path of file that contains list of trusted TLS CAs")
+	fs.StringVar(&cfg.Security.CertPath, "cert", "", "Path of file that contains X509 certificate in PEM format")
+	fs.StringVar(&cfg.Security.KeyPath, "key", "", "Path of file that contains X509 key in PEM format")
+
+	cfg.Namespace = make(map[string]NamespaceConfig)
 
 	return cfg
 }
@@ -148,6 +162,8 @@ const (
 	defaultElectionInterval = 3000 * time.Millisecond
 
 	defaultHeartbeatStreamRebindInterval = time.Minute
+
+	defaultLeaderPriorityCheckInterval = time.Minute
 )
 
 func adjustString(v *string, defValue string) {
@@ -262,6 +278,12 @@ func (c *Config) adjust() error {
 
 	adjustString(&c.InitialClusterState, defualtInitialClusterState)
 
+	if len(c.Join) > 0 {
+		if _, err := url.Parse(c.Join); err != nil {
+			return errors.Errorf("failed to parse join addr:%s, err:%v", c.Join, err)
+		}
+	}
+
 	adjustInt64(&c.LeaderLease, defaultLeaderLease)
 
 	adjustDuration(&c.TsoSaveInterval, time.Duration(defaultLeaderLease)*time.Second)
@@ -276,12 +298,16 @@ func (c *Config) adjust() error {
 	adjustDuration(&c.TickInterval, defaultTickInterval)
 	adjustDuration(&c.ElectionInterval, defaultElectionInterval)
 
+	adjustString(&c.NamespaceClassifier, "default")
+
 	adjustString(&c.Metric.PushJob, c.Name)
 
 	c.Schedule.adjust()
 	c.Replication.adjust()
 
 	adjustDuration(&c.heartbeatStreamBindInterval, defaultHeartbeatStreamRebindInterval)
+
+	adjustDuration(&c.leaderPriorityCheckInterval, defaultLeaderPriorityCheckInterval)
 	return nil
 }
 
@@ -308,7 +334,8 @@ func (c *Config) configFromFile(path string) error {
 type ScheduleConfig struct {
 	// If the snapshot count of one store is greater than this value,
 	// it will never be used as a source or target store.
-	MaxSnapshotCount uint64 `toml:"max-snapshot-count,omitempty" json:"max-snapshot-count"`
+	MaxSnapshotCount    uint64 `toml:"max-snapshot-count,omitempty" json:"max-snapshot-count"`
+	MaxPendingPeerCount uint64 `toml:"max-pending-peer-count,omitempty" json:"max-pending-peer-count"`
 	// MaxStoreDownTime is the max duration after which
 	// a store will be considered to be down if it hasn't reported heartbeats.
 	MaxStoreDownTime typeutil.Duration `toml:"max-store-down-time,omitempty" json:"max-store-down-time"`
@@ -318,6 +345,8 @@ type ScheduleConfig struct {
 	RegionScheduleLimit uint64 `toml:"region-schedule-limit,omitempty" json:"region-schedule-limit"`
 	// ReplicaScheduleLimit is the max coexist replica schedules.
 	ReplicaScheduleLimit uint64 `toml:"replica-schedule-limit,omitempty" json:"replica-schedule-limit"`
+	// TolerantSizeRatio is the ratio of buffer size for balance scheduler.
+	TolerantSizeRatio float64 `toml:"tolerant-size-ratio,omitempty" json:"tolerant-size-ratio"`
 	// Schedulers support for loding customized schedulers
 	Schedulers SchedulerConfigs `toml:"schedulers,omitempty" json:"schedulers-v2"` // json v2 is for the sake of compatible upgrade
 }
@@ -331,6 +360,7 @@ func (c *ScheduleConfig) clone() *ScheduleConfig {
 		LeaderScheduleLimit:  c.LeaderScheduleLimit,
 		RegionScheduleLimit:  c.RegionScheduleLimit,
 		ReplicaScheduleLimit: c.ReplicaScheduleLimit,
+		TolerantSizeRatio:    c.TolerantSizeRatio,
 		Schedulers:           schedulers,
 	}
 }
@@ -347,24 +377,29 @@ type SchedulerConfig struct {
 const (
 	defaultMaxReplicas          = 3
 	defaultMaxSnapshotCount     = 3
-	defaultMaxStoreDownTime     = time.Hour
+	defaultMaxPendingPeerCount  = 16
+	defaultMaxStoreDownTime     = 30 * time.Minute
 	defaultLeaderScheduleLimit  = 64
 	defaultRegionScheduleLimit  = 12
-	defaultReplicaScheduleLimit = 16
+	defaultReplicaScheduleLimit = 32
+	defaultTolerantSizeRatio    = 2.5
 )
 
 var defaultSchedulers = SchedulerConfigs{
 	{Type: "balance-region"},
 	{Type: "balance-leader"},
 	{Type: "hot-region"},
+	{Type: "label"},
 }
 
 func (c *ScheduleConfig) adjust() {
 	adjustUint64(&c.MaxSnapshotCount, defaultMaxSnapshotCount)
+	adjustUint64(&c.MaxPendingPeerCount, defaultMaxPendingPeerCount)
 	adjustDuration(&c.MaxStoreDownTime, defaultMaxStoreDownTime)
 	adjustUint64(&c.LeaderScheduleLimit, defaultLeaderScheduleLimit)
 	adjustUint64(&c.RegionScheduleLimit, defaultRegionScheduleLimit)
 	adjustUint64(&c.ReplicaScheduleLimit, defaultReplicaScheduleLimit)
+	adjustFloat64(&c.TolerantSizeRatio, defaultTolerantSizeRatio)
 	adjustSchedulers(&c.Schedulers, defaultSchedulers)
 }
 
@@ -393,128 +428,78 @@ func (c *ReplicationConfig) adjust() {
 	adjustUint64(&c.MaxReplicas, defaultMaxReplicas)
 }
 
-// scheduleOption is a wrapper to access the configuration safely.
-type scheduleOption struct {
-	v   atomic.Value
-	rep *Replication
+// NamespaceConfig is to overwrite the global setting for specific namespace
+type NamespaceConfig struct {
+	// LeaderScheduleLimit is the max coexist leader schedules.
+	LeaderScheduleLimit uint64 `json:"leader-schedule-limit"`
+	// RegionScheduleLimit is the max coexist region schedules.
+	RegionScheduleLimit uint64 `json:"region-schedule-limit"`
+	// ReplicaScheduleLimit is the max coexist replica schedules.
+	ReplicaScheduleLimit uint64 `json:"replica-schedule-limit"`
+	// MaxReplicas is the number of replicas for each region.
+	MaxReplicas uint64 `json:"max-replicas"`
 }
 
-func newScheduleOption(cfg *Config) *scheduleOption {
-	o := &scheduleOption{}
-	o.store(&cfg.Schedule)
-	o.rep = newReplication(&cfg.Replication)
-	return o
-}
-
-func (o *scheduleOption) load() *ScheduleConfig {
-	return o.v.Load().(*ScheduleConfig)
-}
-
-func (o *scheduleOption) store(cfg *ScheduleConfig) {
-	o.v.Store(cfg)
-}
-
-func (o *scheduleOption) GetReplication() *Replication {
-	return o.rep
-}
-
-func (o *scheduleOption) GetMaxReplicas() int {
-	return o.rep.GetMaxReplicas()
-}
-
-func (o *scheduleOption) GetLocationLabels() []string {
-	return o.rep.GetLocationLabels()
-}
-
-func (o *scheduleOption) SetMaxReplicas(replicas int) {
-	o.rep.SetMaxReplicas(replicas)
-}
-
-func (o *scheduleOption) GetMaxSnapshotCount() uint64 {
-	return o.load().MaxSnapshotCount
-}
-
-func (o *scheduleOption) GetMaxStoreDownTime() time.Duration {
-	return o.load().MaxStoreDownTime.Duration
-}
-
-func (o *scheduleOption) GetLeaderScheduleLimit() uint64 {
-	return o.load().LeaderScheduleLimit
-}
-
-func (o *scheduleOption) GetRegionScheduleLimit() uint64 {
-	return o.load().RegionScheduleLimit
-}
-
-func (o *scheduleOption) GetReplicaScheduleLimit() uint64 {
-	return o.load().ReplicaScheduleLimit
-}
-
-func (o *scheduleOption) GetSchedulers() SchedulerConfigs {
-	return o.load().Schedulers
-}
-
-func (o *scheduleOption) AddSchedulerCfg(tp string, args []string) error {
-	c := o.load()
-	v := c.clone()
-	for _, schedulerCfg := range v.Schedulers {
-		// comparing args is to cover the case that there are schedulers in same type but not with same name
-		// such as two schedulers of type "evict-leader",
-		// one name is "evict-leader-scheduler-1" and the other is "evict-leader-scheduler-2"
-		if reflect.DeepEqual(schedulerCfg, SchedulerConfig{tp, args}) {
-			return nil
-		}
+func (c *NamespaceConfig) clone() *NamespaceConfig {
+	return &NamespaceConfig{
+		LeaderScheduleLimit:  c.LeaderScheduleLimit,
+		RegionScheduleLimit:  c.RegionScheduleLimit,
+		ReplicaScheduleLimit: c.ReplicaScheduleLimit,
+		MaxReplicas:          c.MaxReplicas,
 	}
-	v.Schedulers = append(v.Schedulers, SchedulerConfig{Type: tp, Args: args})
-	o.store(v)
-	return nil
 }
 
-func (o *scheduleOption) RemoveSchedulerCfg(name string) error {
-	c := o.load()
-	v := c.clone()
-	for i, schedulerCfg := range v.Schedulers {
-		// To create a temporary scheduler is just used to get scheduler's name
-		tmp, err := schedule.CreateScheduler(schedulerCfg.Type, o, schedulerCfg.Args...)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		if tmp.GetName() == name {
-			v.Schedulers = append(v.Schedulers[:i], v.Schedulers[i+1:]...)
-			o.store(v)
-			return nil
-		}
-	}
-	return nil
+func (c *NamespaceConfig) adjust(opt *scheduleOption) {
+	adjustUint64(&c.LeaderScheduleLimit, opt.GetLeaderScheduleLimit(namespace.DefaultNamespace))
+	adjustUint64(&c.RegionScheduleLimit, opt.GetRegionScheduleLimit(namespace.DefaultNamespace))
+	adjustUint64(&c.ReplicaScheduleLimit, opt.GetReplicaScheduleLimit(namespace.DefaultNamespace))
+	adjustUint64(&c.MaxReplicas, uint64(opt.GetMaxReplicas(namespace.DefaultNamespace)))
 }
 
-func (o *scheduleOption) persist(kv *core.KV) error {
-	cfg := &Config{
-		Schedule:    *o.load(),
-		Replication: *o.rep.load(),
-	}
-	err := kv.SaveConfig(cfg)
-	return errors.Trace(err)
+// SecurityConfig is the configuration for supporting tls.
+type SecurityConfig struct {
+	// CAPath is the path of file that contains list of trusted SSL CAs. if set, following four settings shouldn't be empty
+	CAPath string `toml:"cacert-path" json:"cacert-path"`
+	// CertPath is the path of file that contains X509 certificate in PEM format.
+	CertPath string `toml:"cert-path" json:"cert-path"`
+	// KeyPath is the path of file that contains X509 key in PEM format.
+	KeyPath string `toml:"key-path" json:"key-path"`
 }
 
-func (o *scheduleOption) reload(kv *core.KV) error {
-	cfg := &Config{
-		Schedule:    *o.load(),
-		Replication: *o.rep.load(),
+// ToTLSConfig generatres tls config.
+func (s SecurityConfig) ToTLSConfig() (*tls.Config, error) {
+	if len(s.CertPath) == 0 && len(s.KeyPath) == 0 {
+		return nil, nil
 	}
-	isExist, err := kv.LoadConfig(cfg)
+	tlsInfo := transport.TLSInfo{
+		CertFile:      s.CertPath,
+		KeyFile:       s.KeyPath,
+		TrustedCAFile: s.CAPath,
+	}
+	tlsConfig, err := tlsInfo.ClientConfig()
 	if err != nil {
-		return errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
-	if isExist {
-		o.store(&cfg.Schedule)
-		o.rep.store(&cfg.Replication)
-	}
-	return nil
+	return tlsConfig, nil
 }
 
-func (o *scheduleOption) GetHotRegionLowThreshold() int {
-	return hotRegionLowThreshold
+// StoreLabel is the config item of LabelPropertyConfig.
+type StoreLabel struct {
+	Key   string `toml:"key" json:"key"`
+	Value string `toml:"value" json:"value"`
+}
+
+// LabelPropertyConfig is the config section to set properties to store labels.
+type LabelPropertyConfig map[string][]StoreLabel
+
+func (c LabelPropertyConfig) clone() LabelPropertyConfig {
+	m := make(map[string][]StoreLabel, len(c))
+	for k, sl := range c {
+		sl2 := make([]StoreLabel, 0, len(sl))
+		sl2 = append(sl2, sl...)
+		m[k] = sl2
+	}
+	return m
 }
 
 // ParseUrls parse a string into multiple urls.
@@ -548,6 +533,14 @@ func (c *Config) genEmbedEtcdConfig() (*embed.Config, error) {
 	cfg.ElectionMs = uint(c.ElectionInterval.Duration / time.Millisecond)
 	cfg.AutoCompactionRetention = c.AutoCompactionRetention
 	cfg.QuotaBackendBytes = int64(c.QuotaBackendBytes)
+
+	cfg.ClientTLSInfo.ClientCertAuth = len(c.Security.CAPath) != 0
+	cfg.ClientTLSInfo.TrustedCAFile = c.Security.CAPath
+	cfg.ClientTLSInfo.CertFile = c.Security.CertPath
+	cfg.ClientTLSInfo.KeyFile = c.Security.KeyPath
+	cfg.PeerTLSInfo.TrustedCAFile = c.Security.CAPath
+	cfg.PeerTLSInfo.CertFile = c.Security.CertPath
+	cfg.PeerTLSInfo.KeyFile = c.Security.KeyPath
 
 	var err error
 

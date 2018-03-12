@@ -19,22 +19,22 @@ import (
 	"sync"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/pd/server/core"
 	"github.com/pingcap/pd/server/schedule"
+	log "github.com/sirupsen/logrus"
 )
 
 func init() {
-	schedule.RegisterScheduler("hot-region", func(opt schedule.Options, args []string) (schedule.Scheduler, error) {
-		return newBalanceHotRegionsScheduler(opt), nil
+	schedule.RegisterScheduler("hot-region", func(limiter *schedule.Limiter, args []string) (schedule.Scheduler, error) {
+		return newBalanceHotRegionsScheduler(limiter), nil
 	})
 	// FIXME: remove this two schedule after the balance test move in schedulers package
-	schedule.RegisterScheduler("hot-write-region", func(opt schedule.Options, args []string) (schedule.Scheduler, error) {
-		return newBalanceHotWriteRegionsScheduler(opt), nil
+	schedule.RegisterScheduler("hot-write-region", func(limiter *schedule.Limiter, args []string) (schedule.Scheduler, error) {
+		return newBalanceHotWriteRegionsScheduler(limiter), nil
 	})
-	schedule.RegisterScheduler("hot-read-region", func(opt schedule.Options, args []string) (schedule.Scheduler, error) {
-		return newBalanceHotReadRegionsScheduler(opt), nil
+	schedule.RegisterScheduler("hot-read-region", func(limiter *schedule.Limiter, args []string) (schedule.Scheduler, error) {
+		return newBalanceHotReadRegionsScheduler(limiter), nil
 	})
 }
 
@@ -67,8 +67,8 @@ func newStoreStaticstics() *storeStatistics {
 }
 
 type balanceHotRegionsScheduler struct {
+	*baseScheduler
 	sync.RWMutex
-	opt   schedule.Options
 	limit uint64
 	types []BalanceType
 
@@ -77,33 +77,36 @@ type balanceHotRegionsScheduler struct {
 	r     *rand.Rand
 }
 
-func newBalanceHotRegionsScheduler(opt schedule.Options) *balanceHotRegionsScheduler {
+func newBalanceHotRegionsScheduler(limiter *schedule.Limiter) *balanceHotRegionsScheduler {
+	base := newBaseScheduler(limiter)
 	return &balanceHotRegionsScheduler{
-		opt:   opt,
-		limit: 1,
-		stats: newStoreStaticstics(),
-		types: []BalanceType{hotWriteRegionBalance, hotReadRegionBalance},
-		r:     rand.New(rand.NewSource(time.Now().UnixNano())),
+		baseScheduler: base,
+		limit:         1,
+		stats:         newStoreStaticstics(),
+		types:         []BalanceType{hotWriteRegionBalance, hotReadRegionBalance},
+		r:             rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
-func newBalanceHotReadRegionsScheduler(opt schedule.Options) *balanceHotRegionsScheduler {
+func newBalanceHotReadRegionsScheduler(limiter *schedule.Limiter) *balanceHotRegionsScheduler {
+	base := newBaseScheduler(limiter)
 	return &balanceHotRegionsScheduler{
-		opt:   opt,
-		limit: 1,
-		stats: newStoreStaticstics(),
-		types: []BalanceType{hotReadRegionBalance},
-		r:     rand.New(rand.NewSource(time.Now().UnixNano())),
+		baseScheduler: base,
+		limit:         1,
+		stats:         newStoreStaticstics(),
+		types:         []BalanceType{hotReadRegionBalance},
+		r:             rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
-func newBalanceHotWriteRegionsScheduler(opt schedule.Options) *balanceHotRegionsScheduler {
+func newBalanceHotWriteRegionsScheduler(limiter *schedule.Limiter) *balanceHotRegionsScheduler {
+	base := newBaseScheduler(limiter)
 	return &balanceHotRegionsScheduler{
-		opt:   opt,
-		limit: 1,
-		stats: newStoreStaticstics(),
-		types: []BalanceType{hotWriteRegionBalance},
-		r:     rand.New(rand.NewSource(time.Now().UnixNano())),
+		baseScheduler: base,
+		limit:         1,
+		stats:         newStoreStaticstics(),
+		types:         []BalanceType{hotWriteRegionBalance},
+		r:             rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
@@ -115,23 +118,11 @@ func (h *balanceHotRegionsScheduler) GetType() string {
 	return "hot-region"
 }
 
-func (h *balanceHotRegionsScheduler) GetInterval() time.Duration {
-	return schedule.MinSlowScheduleInterval
+func (h *balanceHotRegionsScheduler) IsScheduleAllowed(cluster schedule.Cluster) bool {
+	return h.limiter.OperatorCount(schedule.OpHotRegion) < h.limit
 }
 
-func (h *balanceHotRegionsScheduler) GetResourceKind() core.ResourceKind {
-	return core.PriorityKind
-}
-
-func (h *balanceHotRegionsScheduler) GetResourceLimit() uint64 {
-	return h.limit
-}
-
-func (h *balanceHotRegionsScheduler) Prepare(cluster schedule.Cluster) error { return nil }
-
-func (h *balanceHotRegionsScheduler) Cleanup(cluster schedule.Cluster) {}
-
-func (h *balanceHotRegionsScheduler) Schedule(cluster schedule.Cluster) *schedule.Operator {
+func (h *balanceHotRegionsScheduler) Schedule(cluster schedule.Cluster, opInfluence schedule.OpInfluence) *schedule.Operator {
 	schedulerCounter.WithLabelValues(h.GetName(), "schedule").Inc()
 	return h.dispatch(h.types[h.r.Int()%len(h.types)], cluster)
 }
@@ -157,14 +148,14 @@ func (h *balanceHotRegionsScheduler) balanceHotReadRegions(cluster schedule.Clus
 	if srcRegion != nil {
 		schedulerCounter.WithLabelValues(h.GetName(), "move_leader").Inc()
 		step := schedule.TransferLeader{FromStore: srcRegion.Leader.GetStoreId(), ToStore: newLeader.GetStoreId()}
-		return schedule.NewOperator("transferHotReadLeader", srcRegion.GetId(), core.PriorityKind, step)
+		return schedule.NewOperator("transferHotReadLeader", srcRegion.GetId(), schedule.OpHotRegion|schedule.OpLeader, step)
 	}
 
 	// balance by peer
 	srcRegion, srcPeer, destPeer := h.balanceByPeer(cluster, h.stats.readStatAsLeader)
 	if srcRegion != nil {
 		schedulerCounter.WithLabelValues(h.GetName(), "move_peer").Inc()
-		return schedule.CreateMovePeerOperator("moveHotReadRegion", srcRegion, core.PriorityKind, srcPeer.GetStoreId(), destPeer.GetStoreId(), destPeer.GetId())
+		return schedule.CreateMovePeerOperator("moveHotReadRegion", cluster, srcRegion, schedule.OpHotRegion, srcPeer.GetStoreId(), destPeer.GetStoreId(), destPeer.GetId())
 	}
 	schedulerCounter.WithLabelValues(h.GetName(), "skip").Inc()
 	return nil
@@ -175,7 +166,7 @@ func (h *balanceHotRegionsScheduler) balanceHotWriteRegions(cluster schedule.Clu
 	srcRegion, srcPeer, destPeer := h.balanceByPeer(cluster, h.stats.writeStatAsPeer)
 	if srcRegion != nil {
 		schedulerCounter.WithLabelValues(h.GetName(), "move_peer").Inc()
-		return schedule.CreateMovePeerOperator("moveHotWriteRegion", srcRegion, core.PriorityKind, srcPeer.GetStoreId(), destPeer.GetStoreId(), destPeer.GetId())
+		return schedule.CreateMovePeerOperator("moveHotWriteRegion", cluster, srcRegion, schedule.OpHotRegion, srcPeer.GetStoreId(), destPeer.GetStoreId(), destPeer.GetId())
 	}
 
 	// balance by leader
@@ -183,7 +174,7 @@ func (h *balanceHotRegionsScheduler) balanceHotWriteRegions(cluster schedule.Clu
 	if srcRegion != nil {
 		schedulerCounter.WithLabelValues(h.GetName(), "move_leader").Inc()
 		step := schedule.TransferLeader{FromStore: srcRegion.Leader.GetStoreId(), ToStore: newLeader.GetStoreId()}
-		return schedule.NewOperator("transferHotWriteLeader", srcRegion.GetId(), core.PriorityKind, step)
+		return schedule.NewOperator("transferHotWriteLeader", srcRegion.GetId(), schedule.OpHotRegion|schedule.OpLeader, step)
 	}
 
 	schedulerCounter.WithLabelValues(h.GetName(), "skip").Inc()
@@ -193,11 +184,14 @@ func (h *balanceHotRegionsScheduler) balanceHotWriteRegions(cluster schedule.Clu
 func (h *balanceHotRegionsScheduler) calcScore(items []*core.RegionStat, cluster schedule.Cluster, isCountReplica bool) core.StoreHotRegionsStat {
 	stats := make(core.StoreHotRegionsStat)
 	for _, r := range items {
-		if r.HotDegree < h.opt.GetHotRegionLowThreshold() {
+		if r.HotDegree < cluster.GetHotRegionLowThreshold() {
 			continue
 		}
 
 		regionInfo := cluster.GetRegion(r.RegionID)
+		if regionInfo == nil {
+			continue
+		}
 
 		var storeIDs []uint64
 		if isCountReplica {
@@ -248,20 +242,22 @@ func (h *balanceHotRegionsScheduler) balanceByPeer(cluster schedule.Cluster, sto
 	for _, i := range h.r.Perm(storesStat[srcStoreID].RegionsStat.Len()) {
 		rs := storesStat[srcStoreID].RegionsStat[i]
 		srcRegion := cluster.GetRegion(rs.RegionID)
-		if len(srcRegion.DownPeers) != 0 || len(srcRegion.PendingPeers) != 0 {
+		if srcRegion == nil || len(srcRegion.DownPeers) != 0 || len(srcRegion.PendingPeers) != 0 {
 			continue
 		}
 
 		srcStore := cluster.GetStore(srcStoreID)
 		filters := []schedule.Filter{
+			schedule.NewHealthFilter(),
+			schedule.NewStateFilter(),
+			schedule.NewSnapshotCountFilter(),
 			schedule.NewExcludedFilter(srcRegion.GetStoreIds(), srcRegion.GetStoreIds()),
-			schedule.NewStateFilter(h.opt),
-			schedule.NewDistinctScoreFilter(h.opt.GetLocationLabels(), cluster.GetRegionStores(srcRegion), srcStore),
-			schedule.NewStorageThresholdFilter(h.opt),
+			schedule.NewDistinctScoreFilter(cluster.GetLocationLabels(), cluster.GetRegionStores(srcRegion), srcStore),
+			schedule.NewStorageThresholdFilter(),
 		}
 		destStoreIDs := make([]uint64, 0, len(stores))
 		for _, store := range stores {
-			if schedule.FilterTarget(store, filters) {
+			if schedule.FilterTarget(cluster, store, filters) {
 				continue
 			}
 			destStoreIDs = append(destStoreIDs, store.GetId())
@@ -308,13 +304,24 @@ func (h *balanceHotRegionsScheduler) balanceByLeader(cluster schedule.Cluster, s
 	for _, i := range h.r.Perm(storesStat[srcStoreID].RegionsStat.Len()) {
 		rs := storesStat[srcStoreID].RegionsStat[i]
 		srcRegion := cluster.GetRegion(rs.RegionID)
-		if len(srcRegion.DownPeers) != 0 || len(srcRegion.PendingPeers) != 0 {
+		if srcRegion == nil || len(srcRegion.DownPeers) != 0 || len(srcRegion.PendingPeers) != 0 {
 			continue
 		}
 
+		filters := []schedule.Filter{
+			schedule.NewHealthFilter(),
+			schedule.NewStateFilter(),
+			schedule.NewBlockFilter(),
+			schedule.NewRejectLeaderFilter(),
+		}
 		candidateStoreIDs := make([]uint64, 0, len(srcRegion.Peers)-1)
-		for id := range srcRegion.GetFollowers() {
-			candidateStoreIDs = append(candidateStoreIDs, id)
+		for _, store := range cluster.GetFollowerStores(srcRegion) {
+			if !schedule.FilterTarget(cluster, store, filters) {
+				candidateStoreIDs = append(candidateStoreIDs, store.GetId())
+			}
+		}
+		if len(candidateStoreIDs) == 0 {
+			continue
 		}
 		destStoreID := h.selectDestStore(candidateStoreIDs, rs.FlowBytes, srcStoreID, storesStat)
 		if destStoreID == 0 {

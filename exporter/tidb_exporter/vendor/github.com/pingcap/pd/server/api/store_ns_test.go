@@ -16,11 +16,11 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 
 	. "github.com/pingcap/check"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/pd/server"
+	_ "github.com/pingcap/pd/table"
 )
 
 var _ = Suite(&testStoreNsSuite{})
@@ -60,7 +60,7 @@ func (s *testStoreNsSuite) SetUpSuite(c *C) {
 	}
 
 	cfg := server.NewTestSingleConfig()
-	cfg.EnableNamespace = true
+	cfg.NamespaceClassifier = "table"
 	srv, err := server.CreateServer(cfg, NewHandler)
 	c.Assert(err, IsNil)
 	c.Assert(srv.Run(), IsNil)
@@ -89,6 +89,6 @@ func (s *testStoreNsSuite) TestCreateNamespace(c *C) {
 	body := map[string]string{"namespace": "test"}
 	b, err := json.Marshal(body)
 	c.Assert(err, IsNil)
-	err = postJSON(&http.Client{}, fmt.Sprintf("%s/classifier/table/namespaces", s.urlPrefix), b)
+	err = postJSON(fmt.Sprintf("%s/classifier/table/namespaces", s.urlPrefix), b)
 	c.Assert(err, IsNil)
 }

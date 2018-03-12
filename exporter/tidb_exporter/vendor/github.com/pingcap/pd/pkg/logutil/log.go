@@ -19,12 +19,13 @@ import (
 	"os"
 	"path"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/coreos/pkg/capnslog"
 	"github.com/juju/errors"
+	log "github.com/sirupsen/logrus"
 	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -93,7 +94,7 @@ func (rf *redirectFormatter) Flush() {}
 
 // isSKippedPackageName tests wether path name is on log library calling stack.
 func isSkippedPackageName(name string) bool {
-	return strings.Contains(name, "github.com/Sirupsen/logrus") ||
+	return strings.Contains(name, "github.com/sirupsen/logrus") ||
 		strings.Contains(name, "github.com/coreos/pkg/capnslog")
 }
 
@@ -141,7 +142,7 @@ func StringToLogLevel(level string) log.Level {
 	return defaultLogLevel
 }
 
-// textFormatter is for compatability with ngaut/log
+// textFormatter is for compatibility with ngaut/log
 type textFormatter struct {
 	DisableTimestamp bool
 }
@@ -218,9 +219,10 @@ func InitFileLog(cfg *FileLogConfig) error {
 
 var once sync.Once
 
-// InitLogger initalizes PD's logger.
+// InitLogger initializes PD's logger.
 func InitLogger(cfg *LogConfig) error {
 	var err error
+
 	once.Do(func() {
 		log.SetLevel(StringToLogLevel(cfg.Level))
 		log.AddHook(&contextHook{})
@@ -243,4 +245,12 @@ func InitLogger(cfg *LogConfig) error {
 		return errors.Trace(err)
 	}
 	return nil
+}
+
+// LogPanic logs the panic reason and stack, then exit the process.
+// Commonly used with a `defer`.
+func LogPanic() {
+	if e := recover(); e != nil {
+		log.Fatalf("panic: %v, stack: %s", e, string(debug.Stack()))
+	}
 }

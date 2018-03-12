@@ -15,7 +15,6 @@ package server
 
 import (
 	"math/rand"
-	"sync/atomic"
 
 	"github.com/juju/errors"
 	. "github.com/pingcap/check"
@@ -42,7 +41,7 @@ func checkStaleRegion(origin *metapb.Region, region *metapb.Region) error {
 // Create n stores (0..n).
 func newTestStores(n uint64) []*core.StoreInfo {
 	stores := make([]*core.StoreInfo, 0, n)
-	for i := uint64(0); i < n; i++ {
+	for i := uint64(1); i <= n; i++ {
 		store := &metapb.Store{
 			Id: i,
 		}
@@ -56,25 +55,26 @@ func (s *testStoresInfoSuite) TestStores(c *C) {
 	cache := core.NewStoresInfo()
 	stores := newTestStores(n)
 
-	for i := uint64(0); i < n; i++ {
-		c.Assert(cache.GetStore(i), IsNil)
-		c.Assert(cache.BlockStore(i), NotNil)
-		cache.SetStore(stores[i])
-		c.Assert(cache.GetStore(i), DeepEquals, stores[i])
+	for i, store := range stores {
+		id := store.GetId()
+		c.Assert(cache.GetStore(id), IsNil)
+		c.Assert(cache.BlockStore(id), NotNil)
+		cache.SetStore(store)
+		c.Assert(cache.GetStore(id), DeepEquals, store)
 		c.Assert(cache.GetStoreCount(), Equals, int(i+1))
-		c.Assert(cache.BlockStore(i), IsNil)
-		c.Assert(cache.GetStore(i).IsBlocked(), IsTrue)
-		c.Assert(cache.BlockStore(i), NotNil)
-		cache.UnblockStore(i)
-		c.Assert(cache.GetStore(i).IsBlocked(), IsFalse)
+		c.Assert(cache.BlockStore(id), IsNil)
+		c.Assert(cache.GetStore(id).IsBlocked(), IsTrue)
+		c.Assert(cache.BlockStore(id), NotNil)
+		cache.UnblockStore(id)
+		c.Assert(cache.GetStore(id).IsBlocked(), IsFalse)
 	}
 	c.Assert(cache.GetStoreCount(), Equals, int(n))
 
 	for _, store := range cache.GetStores() {
-		c.Assert(store, DeepEquals, stores[store.GetId()])
+		c.Assert(store, DeepEquals, stores[store.GetId()-1])
 	}
 	for _, store := range cache.GetMetaStores() {
-		c.Assert(store, DeepEquals, stores[store.GetId()].Store)
+		c.Assert(store, DeepEquals, stores[store.GetId()-1].Store)
 	}
 
 	c.Assert(cache.GetStoreCount(), Equals, int(n))
@@ -155,6 +155,13 @@ func (s *testRegionsInfoSuite) Test(c *C) {
 
 		c.Assert(region.GetStorePeer(i), NotNil)
 	}
+
+	// check overlaps
+	overlapRegion := regions[n-1]
+	overlapRegion.StartKey = regions[n-2].StartKey
+	cache.AddRegion(overlapRegion)
+	c.Assert(cache.GetRegion(n-2), IsNil)
+	c.Assert(cache.GetRegion(n-1), NotNil)
 
 	// All regions will be filtered out if they have pending peers.
 	for i := uint64(0); i < n; i++ {
@@ -240,10 +247,12 @@ func (s *testClusterInfoSuite) Test(c *C) {
 	tests = append(tests, s.testRegionHeartbeat)
 	tests = append(tests, s.testRegionSplitAndMerge)
 
+	_, opt := newTestScheduleConfig()
+
 	// Test without kv.
 	{
 		for _, test := range tests {
-			cluster := newClusterInfo(newMockIDAllocator())
+			cluster := newClusterInfo(core.NewMockIDAllocator(), opt, nil)
 			test(c, cluster)
 		}
 	}
@@ -253,8 +262,7 @@ func (s *testClusterInfoSuite) Test(c *C) {
 		for _, test := range tests {
 			server, cleanup := mustRunTestServer(c)
 			defer cleanup()
-			cluster := newClusterInfo(server.idAlloc)
-			cluster.kv = server.kv
+			cluster := newClusterInfo(server.idAlloc, opt, server.kv)
 			test(c, cluster)
 		}
 	}
@@ -265,9 +273,10 @@ func (s *testClusterInfoSuite) TestLoadClusterInfo(c *C) {
 	defer cleanup()
 
 	kv := server.kv
+	_, opt := newTestScheduleConfig()
 
 	// Cluster is not bootstrapped.
-	cluster, err := loadClusterInfo(server.idAlloc, kv)
+	cluster, err := loadClusterInfo(server.idAlloc, kv, opt)
 	c.Assert(err, IsNil)
 	c.Assert(cluster, IsNil)
 
@@ -278,7 +287,7 @@ func (s *testClusterInfoSuite) TestLoadClusterInfo(c *C) {
 	stores := mustSaveStores(c, kv, n)
 	regions := mustSaveRegions(c, kv, n)
 
-	cluster, err = loadClusterInfo(server.idAlloc, kv)
+	cluster, err = loadClusterInfo(server.idAlloc, kv, opt)
 	c.Assert(err, IsNil)
 	c.Assert(cluster, NotNil)
 
@@ -346,12 +355,12 @@ func (s *testClusterInfoSuite) testRegionHeartbeat(c *C, cache *clusterInfo) {
 	for i, region := range regions {
 		// region does not exist.
 		c.Assert(cache.handleRegionHeartbeat(region), IsNil)
-		checkRegions(c, cache.regions, regions[:i+1])
+		checkRegions(c, cache.Regions, regions[:i+1])
 		checkRegionsKV(c, cache.kv, regions[:i+1])
 
 		// region is the same, not updated.
 		c.Assert(cache.handleRegionHeartbeat(region), IsNil)
-		checkRegions(c, cache.regions, regions[:i+1])
+		checkRegions(c, cache.Regions, regions[:i+1])
 		checkRegionsKV(c, cache.kv, regions[:i+1])
 
 		epoch := region.Clone().GetRegionEpoch()
@@ -361,7 +370,7 @@ func (s *testClusterInfoSuite) testRegionHeartbeat(c *C, cache *clusterInfo) {
 			Version: epoch.GetVersion() + 1,
 		}
 		c.Assert(cache.handleRegionHeartbeat(region), IsNil)
-		checkRegions(c, cache.regions, regions[:i+1])
+		checkRegions(c, cache.Regions, regions[:i+1])
 		checkRegionsKV(c, cache.kv, regions[:i+1])
 
 		// region is stale (Version).
@@ -370,7 +379,7 @@ func (s *testClusterInfoSuite) testRegionHeartbeat(c *C, cache *clusterInfo) {
 			ConfVer: epoch.GetConfVer() + 1,
 		}
 		c.Assert(cache.handleRegionHeartbeat(stale), NotNil)
-		checkRegions(c, cache.regions, regions[:i+1])
+		checkRegions(c, cache.Regions, regions[:i+1])
 		checkRegionsKV(c, cache.kv, regions[:i+1])
 
 		// region is updated.
@@ -379,7 +388,7 @@ func (s *testClusterInfoSuite) testRegionHeartbeat(c *C, cache *clusterInfo) {
 			ConfVer: epoch.GetConfVer() + 1,
 		}
 		c.Assert(cache.handleRegionHeartbeat(region), IsNil)
-		checkRegions(c, cache.regions, regions[:i+1])
+		checkRegions(c, cache.Regions, regions[:i+1])
 		checkRegionsKV(c, cache.kv, regions[:i+1])
 
 		// region is stale (ConfVer).
@@ -388,7 +397,7 @@ func (s *testClusterInfoSuite) testRegionHeartbeat(c *C, cache *clusterInfo) {
 			Version: epoch.GetVersion() + 1,
 		}
 		c.Assert(cache.handleRegionHeartbeat(stale), NotNil)
-		checkRegions(c, cache.regions, regions[:i+1])
+		checkRegions(c, cache.Regions, regions[:i+1])
 		checkRegionsKV(c, cache.kv, regions[:i+1])
 
 		// Add a down peer.
@@ -399,22 +408,22 @@ func (s *testClusterInfoSuite) testRegionHeartbeat(c *C, cache *clusterInfo) {
 			},
 		}
 		c.Assert(cache.handleRegionHeartbeat(region), IsNil)
-		checkRegions(c, cache.regions, regions[:i+1])
+		checkRegions(c, cache.Regions, regions[:i+1])
 
 		// Add a pending peer.
 		region.PendingPeers = []*metapb.Peer{region.Peers[rand.Intn(len(region.Peers))]}
 		c.Assert(cache.handleRegionHeartbeat(region), IsNil)
-		checkRegions(c, cache.regions, regions[:i+1])
+		checkRegions(c, cache.Regions, regions[:i+1])
 
 		// Clear down peers.
 		region.DownPeers = nil
 		c.Assert(cache.handleRegionHeartbeat(region), IsNil)
-		checkRegions(c, cache.regions, regions[:i+1])
+		checkRegions(c, cache.Regions, regions[:i+1])
 
 		// Clear pending peers.
 		region.PendingPeers = nil
 		c.Assert(cache.handleRegionHeartbeat(region), IsNil)
-		checkRegions(c, cache.regions, regions[:i+1])
+		checkRegions(c, cache.Regions, regions[:i+1])
 	}
 
 	regionCounts := make(map[uint64]int)
@@ -444,9 +453,11 @@ func (s *testClusterInfoSuite) testRegionHeartbeat(c *C, cache *clusterInfo) {
 		}
 	}
 
-	for _, store := range cache.stores.GetStores() {
-		c.Assert(store.LeaderCount, Equals, cache.regions.GetStoreLeaderCount(store.GetId()))
-		c.Assert(store.RegionCount, Equals, cache.regions.GetStoreRegionCount(store.GetId()))
+	for _, store := range cache.Stores.GetStores() {
+		c.Assert(store.LeaderCount, Equals, cache.Regions.GetStoreLeaderCount(store.GetId()))
+		c.Assert(store.RegionCount, Equals, cache.Regions.GetStoreRegionCount(store.GetId()))
+		c.Assert(store.LeaderSize, Equals, cache.Regions.GetStoreLeaderRegionSize(store.GetId()))
+		c.Assert(store.RegionSize, Equals, cache.Regions.GetStoreRegionSize(store.GetId()))
 	}
 
 	// Test with kv.
@@ -458,6 +469,23 @@ func (s *testClusterInfoSuite) testRegionHeartbeat(c *C, cache *clusterInfo) {
 			c.Assert(err, IsNil)
 			c.Assert(tmp, DeepEquals, region.Region)
 		}
+
+		// check overlap
+		overlapRegion := regions[n-1].Clone()
+		overlapRegion.StartKey = regions[n-2].StartKey
+		overlapRegion.Region.Id = overlapRegion.Region.Id + 1
+		c.Assert(cache.handleRegionHeartbeat(overlapRegion), IsNil)
+		region := &metapb.Region{}
+		ok, err := kv.LoadRegion(regions[n-1].GetId(), region)
+		c.Assert(ok, IsFalse)
+		c.Assert(err, IsNil)
+		ok, err = kv.LoadRegion(regions[n-2].GetId(), region)
+		c.Assert(ok, IsFalse)
+		c.Assert(err, IsNil)
+		ok, err = kv.LoadRegion(overlapRegion.GetId(), region)
+		c.Assert(ok, IsTrue)
+		c.Assert(err, IsNil)
+		c.Assert(region, DeepEquals, overlapRegion.Region)
 	}
 }
 
@@ -529,6 +557,54 @@ func (s *testClusterInfoSuite) testRegionSplitAndMerge(c *C, cache *clusterInfo)
 	}
 }
 
+func (s *testClusterInfoSuite) TestUpdateStorePendingPeerCount(c *C) {
+	_, opt := newTestScheduleConfig()
+	tc := newTestClusterInfo(opt)
+	stores := newTestStores(5)
+	for _, s := range stores {
+		tc.putStore(s)
+	}
+	peers := []*metapb.Peer{
+		{
+			Id:      2,
+			StoreId: 1,
+		},
+		{
+			Id:      3,
+			StoreId: 2,
+		},
+		{
+			Id:      3,
+			StoreId: 3,
+		},
+		{
+			Id:      4,
+			StoreId: 4,
+		},
+	}
+	origin := &core.RegionInfo{
+		Region:       &metapb.Region{Id: 1, Peers: peers[:3]},
+		Leader:       peers[0],
+		PendingPeers: peers[1:3],
+	}
+	tc.handleRegionHeartbeat(origin)
+	checkPendingPeerCount([]int{0, 1, 1, 0}, tc.clusterInfo, c)
+	newRegion := &core.RegionInfo{
+		Region:       &metapb.Region{Id: 1, Peers: peers[1:]},
+		Leader:       peers[1],
+		PendingPeers: peers[3:4],
+	}
+	tc.handleRegionHeartbeat(newRegion)
+	checkPendingPeerCount([]int{0, 0, 0, 1}, tc.clusterInfo, c)
+}
+
+func checkPendingPeerCount(expect []int, cache *clusterInfo, c *C) {
+	for i, e := range expect {
+		s := cache.Stores.GetStore(uint64(i + 1))
+		c.Assert(s.PendingPeerCount, Equals, e)
+	}
+}
+
 var _ = Suite(&testClusterUtilSuite{})
 
 type testClusterUtilSuite struct{}
@@ -556,19 +632,6 @@ func (s *testClusterUtilSuite) TestCheckStaleRegion(c *C) {
 	c.Assert(checkStaleRegion(region, origin), NotNil)
 }
 
-// mockIDAllocator mocks IDAllocator and it is only used for test.
-type mockIDAllocator struct {
-	base uint64
-}
-
-func newMockIDAllocator() *mockIDAllocator {
-	return &mockIDAllocator{base: 0}
-}
-
-func (alloc *mockIDAllocator) Alloc() (uint64, error) {
-	return atomic.AddUint64(&alloc.base, 1), nil
-}
-
 func mustSaveStores(c *C, kv *core.KV, n int) []*metapb.Store {
 	stores := make([]*metapb.Store, 0, n)
 	for i := 0; i < n; i++ {
@@ -586,7 +649,7 @@ func mustSaveStores(c *C, kv *core.KV, n int) []*metapb.Store {
 func mustSaveRegions(c *C, kv *core.KV, n int) []*metapb.Region {
 	regions := make([]*metapb.Region, 0, n)
 	for i := 0; i < n; i++ {
-		region := &metapb.Region{Id: uint64(i)}
+		region := newTestRegionMeta(uint64(i))
 		regions = append(regions, region)
 	}
 

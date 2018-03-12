@@ -20,12 +20,12 @@ import (
 	"math/rand"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/coreos/etcd/clientv3"
 	"github.com/golang/protobuf/proto"
 	"github.com/juju/errors"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/pd/pkg/etcdutil"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -232,13 +232,6 @@ func minUint64(a, b uint64) uint64 {
 
 func maxUint64(a, b uint64) uint64 {
 	if a > b {
-		return a
-	}
-	return b
-}
-
-func minDuration(a, b time.Duration) time.Duration {
-	if a < b {
 		return a
 	}
 	return b

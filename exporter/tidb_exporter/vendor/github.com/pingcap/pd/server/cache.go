@@ -17,13 +17,14 @@ import (
 	"sync"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/gogo/protobuf/proto"
 	"github.com/juju/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-	"github.com/pingcap/pd/server/cache"
 	"github.com/pingcap/pd/server/core"
+	"github.com/pingcap/pd/server/namespace"
+	"github.com/pingcap/pd/server/schedule"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -37,31 +38,28 @@ var (
 
 type clusterInfo struct {
 	sync.RWMutex
+	*schedule.BasicCluster
 
-	id              core.IDAllocator
-	kv              *core.KV
-	meta            *metapb.Cluster
-	stores          *core.StoresInfo
-	regions         *core.RegionsInfo
-	activeRegions   int
-	writeStatistics cache.Cache
-	readStatistics  cache.Cache
+	id            core.IDAllocator
+	kv            *core.KV
+	meta          *metapb.Cluster
+	activeRegions int
+	opt           *scheduleOption
+	regionStats   *regionStatistics
 }
 
-func newClusterInfo(id core.IDAllocator) *clusterInfo {
+func newClusterInfo(id core.IDAllocator, opt *scheduleOption, kv *core.KV) *clusterInfo {
 	return &clusterInfo{
-		id:              id,
-		stores:          core.NewStoresInfo(),
-		regions:         core.NewRegionsInfo(),
-		writeStatistics: cache.NewCache(statCacheMaxLen, cache.TwoQueueCache),
-		readStatistics:  cache.NewCache(statCacheMaxLen, cache.TwoQueueCache),
+		BasicCluster: schedule.NewBasicCluster(),
+		id:           id,
+		opt:          opt,
+		kv:           kv,
 	}
 }
 
 // Return nil if cluster is not bootstrapped.
-func loadClusterInfo(id core.IDAllocator, kv *core.KV) (*clusterInfo, error) {
-	c := newClusterInfo(id)
-	c.kv = kv
+func loadClusterInfo(id core.IDAllocator, kv *core.KV, opt *scheduleOption) (*clusterInfo, error) {
+	c := newClusterInfo(id, opt, kv)
 
 	c.meta = &metapb.Cluster{}
 	ok, err := kv.LoadMeta(c.meta)
@@ -73,16 +71,16 @@ func loadClusterInfo(id core.IDAllocator, kv *core.KV) (*clusterInfo, error) {
 	}
 
 	start := time.Now()
-	if err := kv.LoadStores(c.stores, kvRangeLimit); err != nil {
+	if err := kv.LoadStores(c.Stores, kvRangeLimit); err != nil {
 		return nil, errors.Trace(err)
 	}
-	log.Infof("load %v stores cost %v", c.stores.GetStoreCount(), time.Since(start))
+	log.Infof("load %v stores cost %v", c.Stores.GetStoreCount(), time.Since(start))
 
 	start = time.Now()
-	if err := kv.LoadRegions(c.regions, kvRangeLimit); err != nil {
+	if err := kv.LoadRegions(c.Regions, kvRangeLimit); err != nil {
 		return nil, errors.Trace(err)
 	}
-	log.Infof("load %v regions cost %v", c.regions.GetRegionCount(), time.Since(start))
+	log.Infof("load %v regions cost %v", c.Regions.GetRegionCount(), time.Since(start))
 
 	return c, nil
 }
@@ -137,7 +135,7 @@ func (c *clusterInfo) putMetaLocked(meta *metapb.Cluster) error {
 func (c *clusterInfo) GetStore(storeID uint64) *core.StoreInfo {
 	c.RLock()
 	defer c.RUnlock()
-	return c.stores.GetStore(storeID)
+	return c.BasicCluster.GetStore(storeID)
 }
 
 func (c *clusterInfo) putStore(store *core.StoreInfo) error {
@@ -152,162 +150,101 @@ func (c *clusterInfo) putStoreLocked(store *core.StoreInfo) error {
 			return errors.Trace(err)
 		}
 	}
-	c.stores.SetStore(store)
-	return nil
+	return c.BasicCluster.PutStore(store)
 }
 
 // BlockStore stops balancer from selecting the store.
 func (c *clusterInfo) BlockStore(storeID uint64) error {
 	c.Lock()
 	defer c.Unlock()
-	return errors.Trace(c.stores.BlockStore(storeID))
+	return c.BasicCluster.BlockStore(storeID)
 }
 
 // UnblockStore allows balancer to select the store.
 func (c *clusterInfo) UnblockStore(storeID uint64) {
 	c.Lock()
 	defer c.Unlock()
-	c.stores.UnblockStore(storeID)
+	c.BasicCluster.UnblockStore(storeID)
 }
 
 // GetStores returns all stores in the cluster.
 func (c *clusterInfo) GetStores() []*core.StoreInfo {
 	c.RLock()
 	defer c.RUnlock()
-	return c.stores.GetStores()
+	return c.BasicCluster.GetStores()
+}
+
+// GetStoresAverageScore returns the total resource score of all unfiltered stores.
+func (c *clusterInfo) GetStoresAverageScore(kind core.ResourceKind, filters ...schedule.Filter) float64 {
+	c.RLock()
+	defer c.RUnlock()
+
+	var totalResourceSize int64
+	var totalResourceWeight float64
+	for _, s := range c.BasicCluster.GetStores() {
+		if schedule.FilterSource(c, s, filters) {
+			continue
+		}
+
+		totalResourceWeight += s.ResourceWeight(kind)
+		totalResourceSize += s.ResourceSize(kind)
+	}
+
+	if totalResourceWeight == 0 {
+		return 0
+	}
+	return float64(totalResourceSize) / totalResourceWeight
 }
 
 func (c *clusterInfo) getMetaStores() []*metapb.Store {
 	c.RLock()
 	defer c.RUnlock()
-	return c.stores.GetMetaStores()
+	return c.Stores.GetMetaStores()
 }
 
 func (c *clusterInfo) getStoreCount() int {
 	c.RLock()
 	defer c.RUnlock()
-	return c.stores.GetStoreCount()
+	return c.Stores.GetStoreCount()
 }
 
 func (c *clusterInfo) getStoresWriteStat() map[uint64]uint64 {
 	c.RLock()
 	defer c.RUnlock()
-	return c.stores.GetStoresWriteStat()
+	return c.Stores.GetStoresWriteStat()
 }
 
 func (c *clusterInfo) getStoresReadStat() map[uint64]uint64 {
 	c.RLock()
 	defer c.RUnlock()
-	return c.stores.GetStoresReadStat()
+	return c.Stores.GetStoresReadStat()
 }
 
-// GetRegions searches for a region by ID.
+// ScanRegions scans region with start key, until number greater than limit.
+func (c *clusterInfo) ScanRegions(startKey []byte, limit int) []*core.RegionInfo {
+	c.RLock()
+	defer c.RUnlock()
+	return c.Regions.ScanRange(startKey, limit)
+}
+
+// GetRegion searches for a region by ID.
 func (c *clusterInfo) GetRegion(regionID uint64) *core.RegionInfo {
 	c.RLock()
 	defer c.RUnlock()
-	return c.regions.GetRegion(regionID)
-}
-
-func (c *clusterInfo) isNeedUpdateWriteStatCache(region *core.RegionInfo, hotRegionThreshold uint64) (bool, *core.RegionStat) {
-	var v *core.RegionStat
-	key := region.GetId()
-	value, isExist := c.writeStatistics.Peek(key)
-	newItem := &core.RegionStat{
-		RegionID:       region.GetId(),
-		FlowBytes:      region.WrittenBytes,
-		LastUpdateTime: time.Now(),
-		StoreID:        region.Leader.GetStoreId(),
-		Version:        region.GetRegionEpoch().GetVersion(),
-		AntiCount:      hotRegionAntiCount,
-	}
-
-	if isExist {
-		v = value.(*core.RegionStat)
-		newItem.HotDegree = v.HotDegree + 1
-	}
-
-	if region.WrittenBytes < hotRegionThreshold {
-		if !isExist {
-			return false, nil
-		}
-		if v.AntiCount <= 0 {
-			return true, nil
-		}
-		// eliminate some noise
-		newItem.HotDegree = v.HotDegree - 1
-		newItem.AntiCount = v.AntiCount - 1
-		newItem.FlowBytes = v.FlowBytes
-	}
-	return true, newItem
-}
-
-func (c *clusterInfo) isNeedUpdateReadStatCache(region *core.RegionInfo, hotRegionThreshold uint64) (bool, *core.RegionStat) {
-	var v *core.RegionStat
-	key := region.GetId()
-	value, isExist := c.readStatistics.Peek(key)
-	newItem := &core.RegionStat{
-		RegionID:       region.GetId(),
-		FlowBytes:      region.ReadBytes,
-		LastUpdateTime: time.Now(),
-		StoreID:        region.Leader.GetStoreId(),
-		Version:        region.GetRegionEpoch().GetVersion(),
-		AntiCount:      hotRegionAntiCount,
-	}
-
-	if isExist {
-		v = value.(*core.RegionStat)
-		newItem.HotDegree = v.HotDegree + 1
-	}
-
-	if region.ReadBytes < hotRegionThreshold {
-		if !isExist {
-			return false, nil
-		}
-		if v.AntiCount <= 0 {
-			return true, nil
-		}
-		// eliminate some noise
-		newItem.HotDegree = v.HotDegree - 1
-		newItem.AntiCount = v.AntiCount - 1
-		newItem.FlowBytes = v.FlowBytes
-	}
-	return true, newItem
-}
-
-// RegionWriteStats returns hot region's write stats.
-func (c *clusterInfo) RegionWriteStats() []*core.RegionStat {
-	elements := c.writeStatistics.Elems()
-	stats := make([]*core.RegionStat, len(elements))
-	for i := range elements {
-		stats[i] = elements[i].Value.(*core.RegionStat)
-	}
-	return stats
-}
-
-// RegionReadStats returns hot region's read stats.
-func (c *clusterInfo) RegionReadStats() []*core.RegionStat {
-	elements := c.readStatistics.Elems()
-	stats := make([]*core.RegionStat, len(elements))
-	for i := range elements {
-		stats[i] = elements[i].Value.(*core.RegionStat)
-	}
-	return stats
+	return c.BasicCluster.GetRegion(regionID)
 }
 
 // IsRegionHot checks if a region is in hot state.
 func (c *clusterInfo) IsRegionHot(id uint64) bool {
 	c.RLock()
 	defer c.RUnlock()
-	if stat, ok := c.writeStatistics.Peek(id); ok {
-		return stat.(*core.RegionStat).HotDegree >= hotRegionLowThreshold
-	}
-	return false
+	return c.BasicCluster.IsRegionHot(id)
 }
 
 func (c *clusterInfo) searchRegion(regionKey []byte) *core.RegionInfo {
 	c.RLock()
 	defer c.RUnlock()
-	return c.regions.SearchRegion(regionKey)
+	return c.Regions.SearchRegion(regionKey)
 }
 
 func (c *clusterInfo) putRegion(region *core.RegionInfo) error {
@@ -322,87 +259,104 @@ func (c *clusterInfo) putRegionLocked(region *core.RegionInfo) error {
 			return errors.Trace(err)
 		}
 	}
-	c.regions.SetRegion(region)
-	return nil
+	return c.BasicCluster.PutRegion(region)
 }
 
 func (c *clusterInfo) getRegions() []*core.RegionInfo {
 	c.RLock()
 	defer c.RUnlock()
-	return c.regions.GetRegions()
+	return c.Regions.GetRegions()
 }
 
 func (c *clusterInfo) randomRegion() *core.RegionInfo {
 	c.RLock()
 	defer c.RUnlock()
-	return c.regions.RandRegion()
+	return c.Regions.RandRegion()
 }
 
 func (c *clusterInfo) getMetaRegions() []*metapb.Region {
 	c.RLock()
 	defer c.RUnlock()
-	return c.regions.GetMetaRegions()
+	return c.Regions.GetMetaRegions()
 }
 
 func (c *clusterInfo) getRegionCount() int {
 	c.RLock()
 	defer c.RUnlock()
-	return c.regions.GetRegionCount()
+	return c.Regions.GetRegionCount()
+}
+
+func (c *clusterInfo) getRegionStats(startKey, endKey []byte) *core.RegionStats {
+	c.RLock()
+	defer c.RUnlock()
+	return c.Regions.GetRegionStats(startKey, endKey)
+}
+
+func (c *clusterInfo) dropRegion(id uint64) {
+	c.Lock()
+	defer c.Unlock()
+	if region := c.BasicCluster.GetRegion(id); region != nil {
+		c.Regions.RemoveRegion(region)
+	}
 }
 
 func (c *clusterInfo) getStoreRegionCount(storeID uint64) int {
 	c.RLock()
 	defer c.RUnlock()
-	return c.regions.GetStoreRegionCount(storeID)
+	return c.Regions.GetStoreRegionCount(storeID)
 }
 
 func (c *clusterInfo) getStoreLeaderCount(storeID uint64) int {
 	c.RLock()
 	defer c.RUnlock()
-	return c.regions.GetStoreLeaderCount(storeID)
+	return c.Regions.GetStoreLeaderCount(storeID)
 }
 
 // RandLeaderRegion returns a random region that has leader on the store.
 func (c *clusterInfo) RandLeaderRegion(storeID uint64) *core.RegionInfo {
 	c.RLock()
 	defer c.RUnlock()
-	return c.regions.RandLeaderRegion(storeID)
+	return c.BasicCluster.RandLeaderRegion(storeID)
 }
 
-// RandFolowerRegion returns a random region that has a follower on the store.
+// RandFollowerRegion returns a random region that has a follower on the store.
 func (c *clusterInfo) RandFollowerRegion(storeID uint64) *core.RegionInfo {
 	c.RLock()
 	defer c.RUnlock()
-	return c.regions.RandFollowerRegion(storeID)
+	return c.BasicCluster.RandFollowerRegion(storeID)
 }
 
 // GetRegionStores returns all stores that contains the region's peer.
 func (c *clusterInfo) GetRegionStores(region *core.RegionInfo) []*core.StoreInfo {
 	c.RLock()
 	defer c.RUnlock()
+	return c.getRegionStores(region)
+}
+
+func (c *clusterInfo) getRegionStores(region *core.RegionInfo) []*core.StoreInfo {
 	var stores []*core.StoreInfo
 	for id := range region.GetStoreIds() {
-		if store := c.stores.GetStore(id); store != nil {
+		if store := c.Stores.GetStore(id); store != nil {
 			stores = append(stores, store)
 		}
 	}
 	return stores
 }
 
-// GetRegionStores returns all stores that contains the region's leader peer.
+// GetLeaderStore returns all stores that contains the region's leader peer.
 func (c *clusterInfo) GetLeaderStore(region *core.RegionInfo) *core.StoreInfo {
 	c.RLock()
 	defer c.RUnlock()
-	return c.stores.GetStore(region.Leader.GetStoreId())
+	return c.Stores.GetStore(region.Leader.GetStoreId())
 }
 
-// GetRegionStores returns all stores that contains the region's follower peer.
+// GetFollowerStores returns all stores that contains the region's follower peer.
 func (c *clusterInfo) GetFollowerStores(region *core.RegionInfo) []*core.StoreInfo {
 	c.RLock()
 	defer c.RUnlock()
 	var stores []*core.StoreInfo
 	for id := range region.GetFollowers() {
-		if store := c.stores.GetStore(id); store != nil {
+		if store := c.Stores.GetStore(id); store != nil {
 			stores = append(stores, store)
 		}
 	}
@@ -413,7 +367,7 @@ func (c *clusterInfo) GetFollowerStores(region *core.RegionInfo) []*core.StoreIn
 func (c *clusterInfo) isPrepared() bool {
 	c.RLock()
 	defer c.RUnlock()
-	return float64(c.regions.Length())*collectFactor <= float64(c.activeRegions)
+	return float64(c.Regions.Length())*collectFactor <= float64(c.activeRegions)
 }
 
 // handleStoreHeartbeat updates the store status.
@@ -422,29 +376,32 @@ func (c *clusterInfo) handleStoreHeartbeat(stats *pdpb.StoreStats) error {
 	defer c.Unlock()
 
 	storeID := stats.GetStoreId()
-	store := c.stores.GetStore(storeID)
+	store := c.Stores.GetStore(storeID)
 	if store == nil {
 		return errors.Trace(core.ErrStoreNotFound(storeID))
 	}
 	store.Stats = proto.Clone(stats).(*pdpb.StoreStats)
 	store.LastHeartbeatTS = time.Now()
 
-	c.stores.SetStore(store)
+	c.Stores.SetStore(store)
 	return nil
 }
 
 func (c *clusterInfo) updateStoreStatus(id uint64) {
-	c.stores.SetLeaderCount(id, c.regions.GetStoreLeaderCount(id))
-	c.stores.SetRegionCount(id, c.regions.GetStoreRegionCount(id))
+	c.Stores.SetLeaderCount(id, c.Regions.GetStoreLeaderCount(id))
+	c.Stores.SetRegionCount(id, c.Regions.GetStoreRegionCount(id))
+	c.Stores.SetPendingPeerCount(id, c.Regions.GetStorePendingPeerCount(id))
+	c.Stores.SetLeaderSize(id, c.Regions.GetStoreLeaderRegionSize(id))
+	c.Stores.SetRegionSize(id, c.Regions.GetStoreRegionSize(id))
 }
 
 // handleRegionHeartbeat updates the region information.
 func (c *clusterInfo) handleRegionHeartbeat(region *core.RegionInfo) error {
 	region = region.Clone()
 	c.RLock()
-	origin := c.regions.GetRegion(region.GetId())
-	isWriteUpdate, writeItem := c.checkWriteStatus(region)
-	isReadUpdate, readItem := c.checkReadStatus(region)
+	origin := c.Regions.GetRegion(region.GetId())
+	isWriteUpdate, writeItem := c.CheckWriteStatus(region)
+	isReadUpdate, readItem := c.CheckReadStatus(region)
 	c.RUnlock()
 
 	// Save to KV if meta is updated.
@@ -482,6 +439,9 @@ func (c *clusterInfo) handleRegionHeartbeat(region *core.RegionInfo) error {
 		if len(origin.DownPeers) > 0 || len(origin.PendingPeers) > 0 {
 			saveCache = true
 		}
+		if region.ApproximateSize != origin.ApproximateSize {
+			saveCache = true
+		}
 	}
 
 	if saveKV && c.kv != nil {
@@ -502,7 +462,14 @@ func (c *clusterInfo) handleRegionHeartbeat(region *core.RegionInfo) error {
 	}
 
 	if saveCache {
-		c.regions.SetRegion(region)
+		overlaps := c.Regions.SetRegion(region)
+		if c.kv != nil {
+			for _, item := range overlaps {
+				if err := c.kv.DeleteRegion(item); err != nil {
+					log.Errorf("[region %d] fail to delete region %v: %v", item.GetId(), item, err)
+				}
+			}
+		}
 
 		// Update related stores.
 		if origin != nil {
@@ -514,73 +481,91 @@ func (c *clusterInfo) handleRegionHeartbeat(region *core.RegionInfo) error {
 			c.updateStoreStatus(p.GetStoreId())
 		}
 	}
+
+	if c.regionStats != nil {
+		c.regionStats.Observe(region, c.getRegionStores(region), c.GetLocationLabels())
+	}
+
 	key := region.GetId()
 	if isWriteUpdate {
 		if writeItem == nil {
-			c.writeStatistics.Remove(key)
+			c.WriteStatistics.Remove(key)
 		} else {
-			c.writeStatistics.Put(key, writeItem)
+			c.WriteStatistics.Put(key, writeItem)
 		}
 	}
 	if isReadUpdate {
 		if readItem == nil {
-			c.readStatistics.Remove(key)
+			c.ReadStatistics.Remove(key)
 		} else {
-			c.readStatistics.Put(key, readItem)
+			c.ReadStatistics.Put(key, readItem)
 		}
 	}
 	return nil
 }
 
-func (c *clusterInfo) checkWriteStatus(region *core.RegionInfo) (bool, *core.RegionStat) {
-	var WrittenBytesPerSec uint64
-	v, isExist := c.writeStatistics.Peek(region.GetId())
-	if isExist {
-		interval := time.Since(v.(*core.RegionStat).LastUpdateTime).Seconds()
-		if interval < minHotRegionReportInterval {
-			return false, nil
-		}
-		WrittenBytesPerSec = uint64(float64(region.WrittenBytes) / interval)
-	} else {
-		WrittenBytesPerSec = uint64(float64(region.WrittenBytes) / float64(regionHeartBeatReportInterval))
+func (c *clusterInfo) collectMetrics() {
+	if c.regionStats == nil {
+		return
 	}
-	region.WrittenBytes = WrittenBytesPerSec
-
-	// hotRegionThreshold is use to pick hot region
-	// suppose the number of the hot regions is statCacheMaxLen
-	// and we use total written Bytes past storeHeartBeatReportInterval seconds to divide the number of hot regions
-	// divide 2 because the store reports data about two times than the region record write to rocksdb
-	divisor := float64(statCacheMaxLen) * 2 * storeHeartBeatReportInterval
-	hotRegionThreshold := uint64(float64(c.stores.TotalWrittenBytes()) / divisor)
-
-	if hotRegionThreshold < hotWriteRegionMinFlowRate {
-		hotRegionThreshold = hotWriteRegionMinFlowRate
-	}
-	return c.isNeedUpdateWriteStatCache(region, hotRegionThreshold)
+	c.RLock()
+	defer c.RUnlock()
+	c.regionStats.Collect()
 }
 
-func (c *clusterInfo) checkReadStatus(region *core.RegionInfo) (bool, *core.RegionStat) {
-	var ReadBytesPerSec uint64
-	v, isExist := c.readStatistics.Peek(region.GetId())
-	if isExist {
-		interval := time.Now().Sub(v.(*core.RegionStat).LastUpdateTime).Seconds()
-		if interval < minHotRegionReportInterval {
-			return false, nil
-		}
-		ReadBytesPerSec = uint64(float64(region.ReadBytes) / interval)
-	} else {
-		ReadBytesPerSec = uint64(float64(region.ReadBytes) / float64(regionHeartBeatReportInterval))
+func (c *clusterInfo) GetRegionStatsByType(typ regionStatisticType) []*core.RegionInfo {
+	if c.regionStats == nil {
+		return nil
 	}
-	region.ReadBytes = ReadBytesPerSec
+	c.RLock()
+	defer c.RUnlock()
+	return c.regionStats.getRegionStatsByType(typ)
+}
 
-	// hotRegionThreshold is use to pick hot region
-	// suppose the number of the hot regions is statLRUMaxLen
-	// and we use total written Bytes past storeHeartBeatReportInterval seconds to divide the number of hot regions
-	divisor := float64(statCacheMaxLen) * storeHeartBeatReportInterval
-	hotRegionThreshold := uint64(float64(c.stores.TotalReadBytes()) / divisor)
+func (c *clusterInfo) GetOpt() schedule.NamespaceOptions {
+	return c.opt
+}
 
-	if hotRegionThreshold < hotReadRegionMinFlowRate {
-		hotRegionThreshold = hotReadRegionMinFlowRate
-	}
-	return c.isNeedUpdateReadStatCache(region, hotRegionThreshold)
+func (c *clusterInfo) GetLeaderScheduleLimit() uint64 {
+	return c.opt.GetLeaderScheduleLimit(namespace.DefaultNamespace)
+}
+
+func (c *clusterInfo) GetRegionScheduleLimit() uint64 {
+	return c.opt.GetRegionScheduleLimit(namespace.DefaultNamespace)
+}
+
+func (c *clusterInfo) GetReplicaScheduleLimit() uint64 {
+	return c.opt.GetReplicaScheduleLimit(namespace.DefaultNamespace)
+}
+
+func (c *clusterInfo) GetTolerantSizeRatio() float64 {
+	return c.opt.GetTolerantSizeRatio()
+}
+
+func (c *clusterInfo) GetMaxSnapshotCount() uint64 {
+	return c.opt.GetMaxSnapshotCount()
+}
+
+func (c *clusterInfo) GetMaxPendingPeerCount() uint64 {
+	return c.opt.GetMaxPendingPeerCount()
+}
+
+func (c *clusterInfo) GetMaxStoreDownTime() time.Duration {
+	return c.opt.GetMaxStoreDownTime()
+}
+
+func (c *clusterInfo) GetMaxReplicas() int {
+	return c.opt.GetMaxReplicas(namespace.DefaultNamespace)
+}
+
+func (c *clusterInfo) GetLocationLabels() []string {
+	return c.opt.GetLocationLabels()
+}
+
+func (c *clusterInfo) GetHotRegionLowThreshold() int {
+	return c.opt.GetHotRegionLowThreshold()
+}
+
+func (c *clusterInfo) CheckLabelProperty(typ string, labels []*metapb.StoreLabel) bool {
+	return c.opt.CheckLabelProperty(typ, labels)
 }

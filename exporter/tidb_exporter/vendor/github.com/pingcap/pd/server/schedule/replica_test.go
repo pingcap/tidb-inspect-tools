@@ -78,7 +78,7 @@ func (s *testReplicationSuite) TestCompareStoreScore(c *C) {
 }
 
 func (s *testReplicationSuite) newStoreInfo(id uint64, regionCount int, labels map[string]string) *core.StoreInfo {
-	var storeLabels []*metapb.StoreLabel
+	storeLabels := make([]*metapb.StoreLabel, 0, len(labels))
 	for k, v := range labels {
 		storeLabels = append(storeLabels, &metapb.StoreLabel{
 			Key:   k,
@@ -90,5 +90,6 @@ func (s *testReplicationSuite) newStoreInfo(id uint64, regionCount int, labels m
 		Labels: storeLabels,
 	})
 	store.RegionCount = regionCount
+	store.RegionSize = int64(regionCount) * 10
 	return store
 }

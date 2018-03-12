@@ -43,7 +43,7 @@
 
 [[constraint]]
   name = "github.com/pingcap/pd"
-  version = "1.0.8"
+  branch = "master"
 
 [[constraint]]
   name = "github.com/prometheus/client_golang"
@@ -51,4 +51,4 @@
 
 [[constraint]]
   name = "github.com/sirupsen/logrus"
-  version = "0.8.7"
+  version = "1.0.5"

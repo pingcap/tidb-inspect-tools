@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/coreos/etcd/clientv3"
 	. "github.com/pingcap/check"
 	"github.com/pingcap/pd/pkg/testutil"
+	log "github.com/sirupsen/logrus"
 )
 
 func TestServer(t *testing.T) {
@@ -299,7 +299,7 @@ func (s *testServerSuite) TestCheckClusterID(c *C) {
 	_, cleanB := newTestServersWithCfgs(c, []*Config{cfgB})
 	defer cleanB()
 
-	// Start pervious cluster, expect an error.
+	// Start previous cluster, expect an error.
 	cfgA.InitialCluster = originInitial
 	svr, err := CreateServer(cfgA, nil)
 	c.Assert(err, IsNil)

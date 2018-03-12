@@ -13,7 +13,12 @@
 
 package namespace
 
-import "github.com/pingcap/pd/server/core"
+import (
+	"fmt"
+
+	"github.com/juju/errors"
+	"github.com/pingcap/pd/server/core"
+)
 
 // DefaultNamespace is the namespace all the store and region belong to by
 // default.
@@ -29,6 +34,7 @@ type Classifier interface {
 	GetAllNamespaces() []string
 	GetStoreNamespace(*core.StoreInfo) string
 	GetRegionNamespace(*core.RegionInfo) string
+	IsNamespaceExist(name string) bool
 }
 
 type defaultClassifier struct{}
@@ -43,4 +49,37 @@ func (c defaultClassifier) GetStoreNamespace(*core.StoreInfo) string {
 
 func (c defaultClassifier) GetRegionNamespace(*core.RegionInfo) string {
 	return DefaultNamespace
+}
+
+func (c defaultClassifier) IsNamespaceExist(name string) bool {
+	return name == DefaultNamespace
+}
+
+// CreateClassifierFunc is for creating namespace classifier.
+type CreateClassifierFunc func(*core.KV, core.IDAllocator) (Classifier, error)
+
+var classifierMap = make(map[string]CreateClassifierFunc)
+
+// RegisterClassifier binds a classifier creator. It should be called in init()
+// func of a package.
+func RegisterClassifier(name string, createFn CreateClassifierFunc) {
+	if _, ok := classifierMap[name]; ok {
+		panic(fmt.Sprintf("duplicated classifier name: %v", name))
+	}
+	classifierMap[name] = createFn
+}
+
+// CreateClassifier creates a namespace classifier with registered creator func.
+func CreateClassifier(name string, kv *core.KV, idAlloc core.IDAllocator) (Classifier, error) {
+	fn, ok := classifierMap[name]
+	if !ok {
+		return nil, errors.Errorf("create func of %v is not registered", name)
+	}
+	return fn(kv, idAlloc)
+}
+
+func init() {
+	RegisterClassifier("default", func(*core.KV, core.IDAllocator) (Classifier, error) {
+		return DefaultClassifier, nil
+	})
 }

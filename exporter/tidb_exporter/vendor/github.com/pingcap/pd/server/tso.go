@@ -18,10 +18,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/coreos/etcd/clientv3"
 	"github.com/juju/errors"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -144,6 +144,7 @@ func (s *Server) updateTimestamp() error {
 		physical: now,
 	}
 	s.ts.Store(current)
+	metadataGauge.WithLabelValues("tso").Set(float64(now.Unix()))
 
 	return nil
 }

@@ -42,7 +42,9 @@ func (s *testOperatorSuite) newTestRegion(regionID uint64, leaderPeer uint64, pe
 			leader = peer
 		}
 	}
-	return core.NewRegionInfo(&region, leader)
+	regionInfo := core.NewRegionInfo(&region, leader)
+	regionInfo.ApproximateSize = 10
+	return regionInfo
 }
 
 func (s *testOperatorSuite) TestOperatorStep(c *C) {
@@ -56,7 +58,7 @@ func (s *testOperatorSuite) TestOperatorStep(c *C) {
 }
 
 func (s *testOperatorSuite) newTestOperator(regionID uint64, steps ...OperatorStep) *Operator {
-	return NewOperator("testOperator", regionID, core.AdminKind, steps...)
+	return NewOperator("testOperator", regionID, OpAdmin, steps...)
 }
 
 func (s *testOperatorSuite) checkSteps(c *C, op *Operator, steps []OperatorStep) {
@@ -97,4 +99,59 @@ func (s *testOperatorSuite) TestOperator(c *C) {
 	res, err := json.Marshal(op)
 	c.Assert(err, IsNil)
 	c.Assert(len(res), Equals, len(op.String())+2)
+}
+
+func (s *testOperatorSuite) TestInfluence(c *C) {
+	region := s.newTestRegion(1, 1, [2]uint64{1, 1}, [2]uint64{2, 2})
+	opInfluence := make(map[uint64]*StoreInfluence)
+	opInfluence[1] = &StoreInfluence{}
+	opInfluence[2] = &StoreInfluence{}
+
+	AddPeer{ToStore: 2, PeerID: 2}.Influence(opInfluence, region)
+	c.Assert(*opInfluence[2], DeepEquals, StoreInfluence{
+		LeaderSize:  0,
+		LeaderCount: 0,
+		RegionSize:  10,
+		RegionCount: 1,
+	})
+
+	TransferLeader{FromStore: 1, ToStore: 2}.Influence(opInfluence, region)
+	c.Assert(*opInfluence[1], DeepEquals, StoreInfluence{
+		LeaderSize:  -10,
+		LeaderCount: -1,
+		RegionSize:  0,
+		RegionCount: 0,
+	})
+	c.Assert(*opInfluence[2], DeepEquals, StoreInfluence{
+		LeaderSize:  10,
+		LeaderCount: 1,
+		RegionSize:  10,
+		RegionCount: 1,
+	})
+
+	RemovePeer{FromStore: 1}.Influence(opInfluence, region)
+	c.Assert(*opInfluence[1], DeepEquals, StoreInfluence{
+		LeaderSize:  -10,
+		LeaderCount: -1,
+		RegionSize:  -10,
+		RegionCount: -1,
+	})
+	c.Assert(*opInfluence[2], DeepEquals, StoreInfluence{
+		LeaderSize:  10,
+		LeaderCount: 1,
+		RegionSize:  10,
+		RegionCount: 1,
+	})
+}
+
+func (s *testOperatorSuite) TestOperatorKind(c *C) {
+	c.Assert((OpLeader | OpReplica).String(), Equals, "leader,replica")
+	c.Assert(OperatorKind(0).String(), Equals, "unknown")
+	k, err := ParseOperatorKind("balance,region,leader")
+	c.Assert(err, IsNil)
+	c.Assert(k, Equals, OpBalance|OpRegion|OpLeader)
+	_, err = ParseOperatorKind("leader,region")
+	c.Assert(err, IsNil)
+	_, err = ParseOperatorKind("foobar")
+	c.Assert(err, NotNil)
 }

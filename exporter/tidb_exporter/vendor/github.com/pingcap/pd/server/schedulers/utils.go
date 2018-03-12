@@ -17,11 +17,11 @@ import (
 	"math"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/montanaflynn/stats"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/pd/server/core"
 	"github.com/pingcap/pd/server/schedule"
+	log "github.com/sirupsen/logrus"
 )
 
 // scheduleTransferLeader schedules a region to transfer leader to the peer.
@@ -33,12 +33,19 @@ func scheduleTransferLeader(cluster schedule.Cluster, schedulerName string, s sc
 	}
 
 	var averageLeader float64
+	count := 0
 	for _, s := range stores {
-		averageLeader += float64(s.LeaderScore()) / float64(len(stores))
+		if schedule.FilterSource(cluster, s, filters) {
+			continue
+		}
+		averageLeader += float64(s.LeaderScore())
+		count++
 	}
+	averageLeader /= float64(count)
+	log.Debugf("[%s] averageLeader is %v", schedulerName, averageLeader)
 
-	mostLeaderStore := s.SelectSource(stores, filters...)
-	leastLeaderStore := s.SelectTarget(stores, filters...)
+	mostLeaderStore := s.SelectSource(cluster, stores, filters...)
+	leastLeaderStore := s.SelectTarget(cluster, stores, filters...)
 	log.Debugf("[%s] mostLeaderStore is %v, leastLeaderStore is %v", schedulerName, mostLeaderStore, leastLeaderStore)
 
 	var mostLeaderDistance, leastLeaderDistance float64
@@ -91,7 +98,7 @@ func scheduleRemoveLeader(cluster schedule.Cluster, schedulerName string, storeI
 		return nil, nil
 	}
 	targetStores := cluster.GetFollowerStores(region)
-	target := s.SelectTarget(targetStores)
+	target := s.SelectTarget(cluster, targetStores)
 	if target == nil {
 		schedulerCounter.WithLabelValues(schedulerName, "no_target_store").Inc()
 		return nil, nil
@@ -104,7 +111,7 @@ func scheduleRemoveLeader(cluster schedule.Cluster, schedulerName string, storeI
 func scheduleRemovePeer(cluster schedule.Cluster, schedulerName string, s schedule.Selector, filters ...schedule.Filter) (*core.RegionInfo, *metapb.Peer) {
 	stores := cluster.GetStores()
 
-	source := s.SelectSource(stores, filters...)
+	source := s.SelectSource(cluster, stores, filters...)
 	if source == nil {
 		schedulerCounter.WithLabelValues(schedulerName, "no_store").Inc()
 		return nil, nil
@@ -126,7 +133,7 @@ func scheduleRemovePeer(cluster schedule.Cluster, schedulerName string, s schedu
 func scheduleAddPeer(cluster schedule.Cluster, s schedule.Selector, filters ...schedule.Filter) *metapb.Peer {
 	stores := cluster.GetStores()
 
-	target := s.SelectTarget(stores, filters...)
+	target := s.SelectTarget(cluster, stores, filters...)
 	if target == nil {
 		return nil
 	}
@@ -161,35 +168,38 @@ func minDuration(a, b time.Duration) time.Duration {
 	return b
 }
 
-const (
-	bootstrapBalanceCount = 10
-	bootstrapBalanceDiff  = 2
-)
-
-// minBalanceDiff returns the minimal diff to do balance. The formula is based
-// on experience to let the diff increase alone with the count slowly.
-func minBalanceDiff(count uint64) float64 {
-	if count < bootstrapBalanceCount {
-		return bootstrapBalanceDiff
-	}
-	return math.Sqrt(float64(count))
+func takeInfluence(store *core.StoreInfo, storeInfluence *schedule.StoreInfluence) {
+	store.LeaderCount += storeInfluence.LeaderCount
+	store.RegionCount += storeInfluence.RegionCount
+	store.LeaderSize += int64(storeInfluence.LeaderSize)
+	store.RegionSize += int64(storeInfluence.RegionSize)
 }
 
 // shouldBalance returns true if we should balance the source and target store.
-// The min balance diff provides a buffer to make the cluster stable, so that we
+// The tolerantRatio provides a buffer to make the cluster stable, so that we
 // don't need to schedule very frequently.
-func shouldBalance(source, target *core.StoreInfo, kind core.ResourceKind) bool {
-	sourceCount := source.ResourceCount(kind)
+// TODO: simplify the arguments
+func shouldBalance(source, target *core.StoreInfo, avgScore float64, kind core.ResourceKind, region *core.RegionInfo, opInfluence schedule.OpInfluence, tolerantRatio float64) bool {
+	takeInfluence(source, opInfluence.GetStoreInfluence(source.GetId()))
+	takeInfluence(target, opInfluence.GetStoreInfluence(target.GetId()))
+
 	sourceScore := source.ResourceScore(kind)
 	targetScore := target.ResourceScore(kind)
+	log.Debugf("[region %d] source score is %v and target score is %v", region.GetId(), sourceScore, targetScore)
 	if targetScore >= sourceScore {
 		log.Debugf("should balance return false cause targetScore %v >= sourceScore %v", targetScore, sourceScore)
 		return false
 	}
-	diffRatio := 1 - targetScore/sourceScore
-	diffCount := diffRatio * float64(sourceCount)
-	log.Debugf("count diff is %v and balance diff is %v", diffCount, minBalanceDiff(sourceCount))
-	return diffCount >= minBalanceDiff(sourceCount)
+
+	// avgScore is the goal for every store
+	// in expectation, sourceScore > avgScore > targetScore
+	// if not, moving region is not necessary
+	// In this case, either sourceSizeDiff or targetSizeDiff will be negative, then obviously return false
+	sourceSizeDiff := (sourceScore - avgScore) * source.ResourceWeight(kind)
+	targetSizeDiff := (avgScore - targetScore) * target.ResourceWeight(kind)
+
+	log.Debugf("[region %d] size diff is %v and tolerant size is %v", region.GetId(), math.Min(sourceSizeDiff, targetSizeDiff), float64(region.ApproximateSize)*tolerantRatio)
+	return math.Min(sourceSizeDiff, targetSizeDiff) >= float64(region.ApproximateSize)*tolerantRatio
 }
 
 func adjustBalanceLimit(cluster schedule.Cluster, kind core.ResourceKind) uint64 {

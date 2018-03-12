@@ -23,19 +23,36 @@ import (
 	"net/url"
 	"os"
 
-	log "github.com/Sirupsen/logrus"
+	"github.com/coreos/etcd/pkg/transport"
 	"github.com/juju/errors"
-	"github.com/pingcap/pd/pd-client"
 	"github.com/spf13/cobra"
 )
 
 var (
-	pdClient   pd.Client
 	dailClient = &http.Client{}
 
 	pingPrefix     = "pd/ping"
 	errInvalidAddr = errors.New("Invalid pd address, Cannot get connect to it")
 )
+
+// InitHTTPSClient creates https client with ca file
+func InitHTTPSClient(CAPath, CertPath, KeyPath string) error {
+	tlsInfo := transport.TLSInfo{
+		CertFile:      CertPath,
+		KeyFile:       KeyPath,
+		TrustedCAFile: CAPath,
+	}
+	tlsConfig, err := tlsInfo.ClientConfig()
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	dailClient = &http.Client{Transport: &http.Transport{
+		TLSClientConfig: tlsConfig,
+	}}
+
+	return nil
+}
 
 func getRequest(cmd *cobra.Command, prefix string, method string, bodyType string, body io.Reader) (*http.Request, error) {
 	if method == "" {
@@ -80,34 +97,6 @@ func doRequest(cmd *cobra.Command, prefix string, method string) (string, error)
 func genResponseError(r *http.Response) error {
 	res, _ := ioutil.ReadAll(r.Body)
 	return errors.Errorf("[%d] %s", r.StatusCode, res)
-}
-
-// InitPDClient initialize pd client from cmd
-func InitPDClient(cmd *cobra.Command) error {
-	addr, err := cmd.Flags().GetString("pd")
-	if err != nil {
-		return err
-	}
-	log.SetOutput(ioutil.Discard)
-	if pdClient != nil {
-		return nil
-	}
-	err = validPDAddr(addr)
-	if err != nil {
-		return err
-	}
-	pdClient, err = pd.NewClient([]string{addr})
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func getClient() (pd.Client, error) {
-	if pdClient == nil {
-		return nil, errors.New("Must initialized pdClient firstly")
-	}
-	return pdClient, nil
 }
 
 func getAddressFromCmd(cmd *cobra.Command, prefix string) string {
@@ -189,7 +178,7 @@ Examples:
 Available Commands:{{range .Commands}}{{if .IsAvailableCommand}}
   {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{ if .HasAvailableLocalFlags}}
 
-Additional help topics:{{range .Commands}}{{if .IsHelpCommand}}
+Additional help topics:{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
   {{rpad .CommandPath .CommandPathPadding}} {{.Short}}{{end}}{{end}}{{end}}{{ if .HasAvailableSubCommands }}
 
 Use "{{if .HasParent}}help {{.Name}} [command] {{else}}help [command]{{end}}" for more information about a command.{{end}}

@@ -18,9 +18,9 @@ import (
 	"path"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/coreos/etcd/clientv3"
 	"github.com/juju/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -85,6 +85,20 @@ func (kv *etcdKVBase) Save(key, value string) error {
 	resp, err := kv.server.leaderTxn().Then(clientv3.OpPut(key, value)).Commit()
 	if err != nil {
 		log.Errorf("save to etcd error: %v", err)
+		return errors.Trace(err)
+	}
+	if !resp.Succeeded {
+		return errors.Trace(errTxnFailed)
+	}
+	return nil
+}
+
+func (kv *etcdKVBase) Delete(key string) error {
+	key = path.Join(kv.rootPath, key)
+
+	resp, err := kv.server.leaderTxn().Then(clientv3.OpDelete(key)).Commit()
+	if err != nil {
+		log.Errorf("delete from etcd error: %v", err)
 		return errors.Trace(err)
 	}
 	if !resp.Succeeded {

@@ -15,6 +15,7 @@ package server
 
 import (
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/coreos/etcd/clientv3"
@@ -23,15 +24,6 @@ import (
 	"github.com/juju/errors"
 	"github.com/pingcap/pd/pkg/etcdutil"
 )
-
-// TODO: support HTTPS
-func genClientV3Config(cfg *Config) clientv3.Config {
-	endpoints := strings.Split(cfg.Join, ",")
-	return clientv3.Config{
-		Endpoints:   endpoints,
-		DialTimeout: etcdutil.DefaultDialTimeout,
-	}
-}
 
 // PrepareJoinCluster sends MemberAdd command to PD cluster,
 // and returns the initial configuration of the PD cluster.
@@ -81,17 +73,23 @@ func PrepareJoinCluster(cfg *Config) error {
 	}
 
 	// Cases with data directory.
-
 	initialCluster := ""
-	if wal.Exist(cfg.DataDir) {
+	if wal.Exist(path.Join(cfg.DataDir, "member")) {
 		cfg.InitialCluster = initialCluster
 		cfg.InitialClusterState = embed.ClusterStateFlagExisting
 		return nil
 	}
 
 	// Below are cases without data directory.
-
-	client, err := clientv3.New(genClientV3Config(cfg))
+	tlsConfig, err := cfg.Security.ToTLSConfig()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	client, err := clientv3.New(clientv3.Config{
+		Endpoints:   strings.Split(cfg.Join, ","),
+		DialTimeout: etcdutil.DefaultDialTimeout,
+		TLS:         tlsConfig,
+	})
 	if err != nil {
 		return errors.Trace(err)
 	}

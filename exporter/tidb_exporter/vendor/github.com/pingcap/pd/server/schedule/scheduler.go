@@ -14,19 +14,13 @@
 package schedule
 
 import (
-	"fmt"
+	"sync"
 	"time"
 
 	"github.com/juju/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/pd/server/core"
-)
-
-// options for interval of schedulers
-const (
-	MaxScheduleInterval     = time.Minute
-	MinScheduleInterval     = time.Millisecond * 10
-	MinSlowScheduleInterval = time.Second * 3
+	log "github.com/sirupsen/logrus"
 )
 
 // Cluster provides an overview of a cluster's regions distribution.
@@ -40,6 +34,8 @@ type Cluster interface {
 	GetRegionStores(region *core.RegionInfo) []*core.StoreInfo
 	GetFollowerStores(region *core.RegionInfo) []*core.StoreInfo
 	GetLeaderStore(region *core.RegionInfo) *core.StoreInfo
+	GetStoresAverageScore(kind core.ResourceKind, filters ...Filter) float64
+	ScanRegions(startKey []byte, limit int) []*core.RegionInfo
 
 	BlockStore(id uint64) error
 	UnblockStore(id uint64)
@@ -47,6 +43,10 @@ type Cluster interface {
 	IsRegionHot(id uint64) bool
 	RegionWriteStats() []*core.RegionStat
 	RegionReadStats() []*core.RegionStat
+
+	// get config methods
+	GetOpt() NamespaceOptions
+	Options
 
 	// TODO: it should be removed. Schedulers don't need to know anything
 	// about peers.
@@ -58,16 +58,16 @@ type Scheduler interface {
 	GetName() string
 	// GetType should in accordance with the name passing to schedule.RegisterScheduler()
 	GetType() string
-	GetInterval() time.Duration
-	GetResourceKind() core.ResourceKind
-	GetResourceLimit() uint64
+	GetMinInterval() time.Duration
+	GetNextInterval(interval time.Duration) time.Duration
 	Prepare(cluster Cluster) error
 	Cleanup(cluster Cluster)
-	Schedule(cluster Cluster) *Operator
+	Schedule(cluster Cluster, opInfluence OpInfluence) *Operator
+	IsScheduleAllowed(cluster Cluster) bool
 }
 
 // CreateSchedulerFunc is for creating scheudler.
-type CreateSchedulerFunc func(opt Options, args []string) (Scheduler, error)
+type CreateSchedulerFunc func(limiter *Limiter, args []string) (Scheduler, error)
 
 var schedulerMap = make(map[string]CreateSchedulerFunc)
 
@@ -75,16 +75,54 @@ var schedulerMap = make(map[string]CreateSchedulerFunc)
 // func of a package.
 func RegisterScheduler(name string, createFn CreateSchedulerFunc) {
 	if _, ok := schedulerMap[name]; ok {
-		panic(fmt.Sprintf("duplicated scheduler name: %v", name))
+		log.Fatalf("duplicated scheduler name: %v", name)
 	}
 	schedulerMap[name] = createFn
 }
 
 // CreateScheduler creates a scheduler with registered creator func.
-func CreateScheduler(name string, opt Options, args ...string) (Scheduler, error) {
+func CreateScheduler(name string, limiter *Limiter, args ...string) (Scheduler, error) {
 	fn, ok := schedulerMap[name]
 	if !ok {
 		return nil, errors.Errorf("create func of %v is not registered", name)
 	}
-	return fn(opt, args)
+	return fn(limiter, args)
+}
+
+// Limiter a counter that limits the number of operators
+type Limiter struct {
+	sync.RWMutex
+	counts map[OperatorKind]uint64
+}
+
+// NewLimiter create a schedule limiter
+func NewLimiter() *Limiter {
+	return &Limiter{
+		counts: make(map[OperatorKind]uint64),
+	}
+}
+
+// UpdateCounts updates resouce counts using current pending operators.
+func (l *Limiter) UpdateCounts(operators map[uint64]*Operator) {
+	l.Lock()
+	defer l.Unlock()
+	for k := range l.counts {
+		delete(l.counts, k)
+	}
+	for _, op := range operators {
+		l.counts[op.Kind()]++
+	}
+}
+
+// OperatorCount gets the count of operators filtered by mask.
+func (l *Limiter) OperatorCount(mask OperatorKind) uint64 {
+	l.RLock()
+	defer l.RUnlock()
+	var total uint64
+	for k, count := range l.counts {
+		if k&mask != 0 {
+			total += count
+		}
+	}
+	return total
 }

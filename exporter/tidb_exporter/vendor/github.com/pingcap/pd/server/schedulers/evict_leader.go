@@ -16,7 +16,6 @@ package schedulers
 import (
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/juju/errors"
 	"github.com/pingcap/pd/server/core"
@@ -24,7 +23,7 @@ import (
 )
 
 func init() {
-	schedule.RegisterScheduler("evict-leader", func(opt schedule.Options, args []string) (schedule.Scheduler, error) {
+	schedule.RegisterScheduler("evict-leader", func(limiter *schedule.Limiter, args []string) (schedule.Scheduler, error) {
 		if len(args) != 1 {
 			return nil, errors.New("evict-leader needs 1 argument")
 		}
@@ -32,12 +31,12 @@ func init() {
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		return newEvictLeaderScheduler(opt, id), nil
+		return newEvictLeaderScheduler(limiter, id), nil
 	})
 }
 
 type evictLeaderScheduler struct {
-	opt      schedule.Options
+	*baseScheduler
 	name     string
 	storeID  uint64
 	selector schedule.Selector
@@ -45,17 +44,17 @@ type evictLeaderScheduler struct {
 
 // newEvictLeaderScheduler creates an admin scheduler that transfers all leaders
 // out of a store.
-func newEvictLeaderScheduler(opt schedule.Options, storeID uint64) schedule.Scheduler {
+func newEvictLeaderScheduler(limiter *schedule.Limiter, storeID uint64) schedule.Scheduler {
 	filters := []schedule.Filter{
-		schedule.NewStateFilter(opt),
-		schedule.NewHealthFilter(opt),
+		schedule.NewStateFilter(),
+		schedule.NewHealthFilter(),
 	}
-
+	base := newBaseScheduler(limiter)
 	return &evictLeaderScheduler{
-		opt:      opt,
-		name:     fmt.Sprintf("evict-leader-scheduler-%d", storeID),
-		storeID:  storeID,
-		selector: schedule.NewRandomSelector(filters),
+		baseScheduler: base,
+		name:          fmt.Sprintf("evict-leader-scheduler-%d", storeID),
+		storeID:       storeID,
+		selector:      schedule.NewRandomSelector(filters),
 	}
 }
 
@@ -67,18 +66,6 @@ func (s *evictLeaderScheduler) GetType() string {
 	return "evict-leader"
 }
 
-func (s *evictLeaderScheduler) GetInterval() time.Duration {
-	return schedule.MinScheduleInterval
-}
-
-func (s *evictLeaderScheduler) GetResourceKind() core.ResourceKind {
-	return core.LeaderKind
-}
-
-func (s *evictLeaderScheduler) GetResourceLimit() uint64 {
-	return s.opt.GetLeaderScheduleLimit()
-}
-
 func (s *evictLeaderScheduler) Prepare(cluster schedule.Cluster) error {
 	return errors.Trace(cluster.BlockStore(s.storeID))
 }
@@ -87,19 +74,25 @@ func (s *evictLeaderScheduler) Cleanup(cluster schedule.Cluster) {
 	cluster.UnblockStore(s.storeID)
 }
 
-func (s *evictLeaderScheduler) Schedule(cluster schedule.Cluster) *schedule.Operator {
+func (s *evictLeaderScheduler) IsScheduleAllowed(cluster schedule.Cluster) bool {
+	return s.limiter.OperatorCount(schedule.OpLeader) < cluster.GetLeaderScheduleLimit()
+}
+
+func (s *evictLeaderScheduler) Schedule(cluster schedule.Cluster, opInfluence schedule.OpInfluence) *schedule.Operator {
 	schedulerCounter.WithLabelValues(s.GetName(), "schedule").Inc()
 	region := cluster.RandLeaderRegion(s.storeID)
 	if region == nil {
 		schedulerCounter.WithLabelValues(s.GetName(), "no_leader").Inc()
 		return nil
 	}
-	target := s.selector.SelectTarget(cluster.GetFollowerStores(region))
+	target := s.selector.SelectTarget(cluster, cluster.GetFollowerStores(region))
 	if target == nil {
 		schedulerCounter.WithLabelValues(s.GetName(), "no_target_store").Inc()
 		return nil
 	}
 	schedulerCounter.WithLabelValues(s.GetName(), "new_operator").Inc()
 	step := schedule.TransferLeader{FromStore: region.Leader.GetStoreId(), ToStore: target.GetId()}
-	return schedule.NewOperator("evict-leader", region.GetId(), core.LeaderKind, step)
+	op := schedule.NewOperator("evict-leader", region.GetId(), schedule.OpLeader, step)
+	op.SetPriorityLevel(core.HighPriority)
+	return op
 }

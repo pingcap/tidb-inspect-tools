@@ -18,9 +18,9 @@ import (
 	"io/ioutil"
 	"net/http"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/pingcap/pd/pkg/logutil"
 	"github.com/pingcap/pd/server"
+	log "github.com/sirupsen/logrus"
 	"github.com/unrolled/render"
 )
 

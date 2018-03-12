@@ -14,12 +14,11 @@
 package server
 
 import (
-	"path"
 	"sync"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/coreos/etcd/clientv3"
 	"github.com/juju/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -89,9 +88,6 @@ func (alloc *idAllocator) generate() (uint64, error) {
 	}
 
 	log.Infof("idAllocator allocates a new id: %d", end)
+	metadataGauge.WithLabelValues("idalloc").Set(float64(end))
 	return end, nil
-}
-
-func (s *Server) getAllocIDPath() string {
-	return path.Join(s.rootPath, "alloc_id")
 }

@@ -14,36 +14,34 @@
 package schedulers
 
 import (
-	"time"
-
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/pd/server/core"
 	"github.com/pingcap/pd/server/schedule"
 )
 
 func init() {
-	schedule.RegisterScheduler("shuffle-leader", func(opt schedule.Options, args []string) (schedule.Scheduler, error) {
-		return newShuffleLeaderScheduler(opt), nil
+	schedule.RegisterScheduler("shuffle-leader", func(limiter *schedule.Limiter, args []string) (schedule.Scheduler, error) {
+		return newShuffleLeaderScheduler(limiter), nil
 	})
 }
 
 type shuffleLeaderScheduler struct {
-	opt      schedule.Options
+	*baseScheduler
 	selector schedule.Selector
 	selected *metapb.Peer
 }
 
 // newShuffleLeaderScheduler creates an admin scheduler that shuffles leaders
 // between stores.
-func newShuffleLeaderScheduler(opt schedule.Options) schedule.Scheduler {
+func newShuffleLeaderScheduler(limiter *schedule.Limiter) schedule.Scheduler {
 	filters := []schedule.Filter{
-		schedule.NewStateFilter(opt),
-		schedule.NewHealthFilter(opt),
+		schedule.NewStateFilter(),
+		schedule.NewHealthFilter(),
 	}
-
+	base := newBaseScheduler(limiter)
 	return &shuffleLeaderScheduler{
-		opt:      opt,
-		selector: schedule.NewRandomSelector(filters),
+		baseScheduler: base,
+		selector:      schedule.NewRandomSelector(filters),
 	}
 }
 
@@ -55,23 +53,11 @@ func (s *shuffleLeaderScheduler) GetType() string {
 	return "shuffle-leader"
 }
 
-func (s *shuffleLeaderScheduler) GetInterval() time.Duration {
-	return schedule.MinScheduleInterval
+func (s *shuffleLeaderScheduler) IsScheduleAllowed(cluster schedule.Cluster) bool {
+	return s.limiter.OperatorCount(schedule.OpLeader) < cluster.GetLeaderScheduleLimit()
 }
 
-func (s *shuffleLeaderScheduler) GetResourceKind() core.ResourceKind {
-	return core.LeaderKind
-}
-
-func (s *shuffleLeaderScheduler) GetResourceLimit() uint64 {
-	return s.opt.GetLeaderScheduleLimit()
-}
-
-func (s *shuffleLeaderScheduler) Prepare(cluster schedule.Cluster) error { return nil }
-
-func (s *shuffleLeaderScheduler) Cleanup(cluster schedule.Cluster) {}
-
-func (s *shuffleLeaderScheduler) Schedule(cluster schedule.Cluster) *schedule.Operator {
+func (s *shuffleLeaderScheduler) Schedule(cluster schedule.Cluster, opInfluence schedule.OpInfluence) *schedule.Operator {
 	// We shuffle leaders between stores:
 	// 1. select a store randomly.
 	// 2. transfer a leader from the store to another store.
@@ -89,7 +75,7 @@ func (s *shuffleLeaderScheduler) Schedule(cluster schedule.Cluster) *schedule.Op
 		s.selected = region.Leader
 		schedulerCounter.WithLabelValues(s.GetName(), "new_operator").Inc()
 		step := schedule.TransferLeader{FromStore: region.Leader.GetStoreId(), ToStore: newLeader.GetStoreId()}
-		return schedule.NewOperator("shuffle-leader", region.GetId(), core.LeaderKind, step)
+		return schedule.NewOperator("shuffle-leader", region.GetId(), schedule.OpAdmin|schedule.OpLeader, step)
 	}
 
 	// Reset the selected store.
@@ -104,5 +90,7 @@ func (s *shuffleLeaderScheduler) Schedule(cluster schedule.Cluster) *schedule.Op
 	}
 	schedulerCounter.WithLabelValues(s.GetName(), "new_operator").Inc()
 	step := schedule.TransferLeader{FromStore: region.Leader.GetStoreId(), ToStore: storeID}
-	return schedule.NewOperator("shuffleSelectedLeader", region.GetId(), core.LeaderKind, step)
+	op := schedule.NewOperator("shuffleSelectedLeader", region.GetId(), schedule.OpAdmin|schedule.OpLeader, step)
+	op.SetPriorityLevel(core.HighPriority)
+	return op
 }
