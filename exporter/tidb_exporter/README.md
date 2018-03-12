@@ -1,4 +1,4 @@
-mysql-alive
+tidb_exporter
 ------
 
 **This tool is used to check TiDB's cluster status and report to prometheus, send critical message to alertmanger**
@@ -40,6 +40,13 @@ Usage of ./bin/tidb_exporter:
 
 ### Examples:
 - check tidb's cluster
-	- `./bin/tidb_exporter  -pd-list "http://10.1.0.4:2379,http://10.1.0.5:2379,http://10.1.0.6:2379" -tidb-list "10.1.0.4:4000,10.1.0.5:4000,10.1.0.6:4000" -metrics 10.1.0.4:9091  -daemon -alertmanger-list 10.1.0.4:9093`
+```
+ ./bin/tidb_exporter \
+     -pd-list "http://10.1.0.4:2379,http://10.1.0.5:2379,http://10.1.0.6:2379" \
+     -tidb-list "10.1.0.4:4000,10.1.0.5:4000,10.1.0.6:4000" \
+     -metrics 10.1.0.4:9091  \
+     -daemon \
+     -alertmanger-list 10.1.0.4:9093
+```
 
 	
