@@ -1,47 +1,45 @@
 mysql-alive
 ------
 
-**This tool is used to check tidb alive**
+**This tool is used to check TiDB's cluster status and report to prometheus, send critical message to alertmanger**
 ### Build
-- install Golang(1.8.3+)
+- install Golang(1.10+)
 - `make`
 
-**The target executable binary file is bin/mysql-alive**
+**The target executable binary file is bin/tidb_exporter**
 
 ### Usages
 ```
-Usage of ./bin/mysql-alive:
-  -host string
-    	tidb host (default "127.0.0.1")
+Usage of ./bin/tidb_exporter:
+  -alertmanger-list string
+    	alertmanger list,example:'10.0.3.5:9093,10.0.3.6:9093'
+  -daemon
+    	run as daemon
   -interval int
     	check alive interval (default 180)
-  -kill-trigger
-    	kill -9 tidb's process that listen port
   -log-file string
     	log filename
+  -log-level string
+    	log level:panic,fatal,error,warning,info,debug (default "info")
   -metrics string
     	metrics address
   -password string
     	tidb password
-  -port int
-    	tidb port (default 4000)
+  -pd-list string
+    	pd list, example:'http://10.0.3.5:2379,http://10.0.3.6:2379'
   -query-timeout int
-    	execute query timeout (default 30)
-  -suffix-command string
-    	when check tidb failed and run shell command
+    	tidb execute query timeout (default 20)
+  -tidb-list string
+    	tidb list, example:'10.0.3.5:4000,10.0.3.6:4000'
+  -tikv-list string
+    	tikv list, example:'10.0.3.5:20160,10.0.3.6:20160'
   -user string
     	tidb user (default "root")
 ```
 
 
-### Attentions
-- `kill-trigger` is **very careful**, It's use command **`kill -9 $PID`**
-- `kill-trigger` and `suffix-command` all setting
-	- **`kill-trigger` execute first**
-
-
 ### Examples:
-- check tidb 
-	- `./bin/mysql-alive -interval 30 -kill-trigger  -log-file mysql_alive.log -metrics "10.0.3.6:9091" -port 4000 -suffix-command "/mnt/resource/tidb_cluster/scripts/start_tidb.sh"`
+- check tidb's cluster
+	- `./bin/tidb_exporter  -pd-list "http://10.1.0.4:2379,http://10.1.0.5:2379,http://10.1.0.6:2379" -tidb-list "10.1.0.4:4000,10.1.0.5:4000,10.1.0.6:4000" -metrics 10.1.0.4:9091  -daemon -alertmanger-list 10.1.0.4:9093`
 
 	
