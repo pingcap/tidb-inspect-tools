@@ -15,7 +15,7 @@ default: sms-adapter
 
 all: check test sms-adapter
 
-kafka-adapter:
+sms-adapter:
 	$(GOBUILD) -o bin/sms-adapter *.go
 
 test:
