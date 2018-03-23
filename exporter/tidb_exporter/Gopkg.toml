@@ -22,8 +22,28 @@
 
 
 [[constraint]]
+  branch = "master"
+  name = "github.com/drael/GOnetstat"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/dustin/go-humanize"
+
+[[constraint]]
   name = "github.com/go-sql-driver/mysql"
   version = "1.3.0"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/juju/errors"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/pingcap/kvproto"
+
+[[constraint]]
+  name = "github.com/pingcap/pd"
+  branch = "master"
 
 [[constraint]]
   name = "github.com/prometheus/client_golang"
@@ -31,4 +51,4 @@
 
 [[constraint]]
   name = "github.com/sirupsen/logrus"
-  version = "0.8.7"
+  version = "1.0.5"
