@@ -10,6 +10,7 @@ const (
 	timeFormat = "2006-01-02 15:04:05"
 )
 
+// syslogMessage syslog base struct
 type syslogMessage struct {
 	AlertName   string
 	Cluster     string
@@ -22,6 +23,7 @@ type syslogMessage struct {
 	Time        string
 }
 
+// Send message to syslog service
 func (r *Run) sendAlert(msg string) error {
 	_, err := fmt.Fprint(r.sysLog, msg)
 	if err != nil {
@@ -31,7 +33,22 @@ func (r *Run) sendAlert(msg string) error {
 	return nil
 }
 
-//TransferData transfer alert to syslog string
+// TransferData transfer alert to syslog string
+// The following is customer's syslog format:
+// ip: alert-ip from startup parameter or instace
+// hostname: alert-hostname from startup parameter or instance
+// "Database"
+// "TiDB"
+// "Log"
+// syslogMsg.Instance
+// syslogMsg.Value
+// syslogMsg.Summary
+// syslogMsg.Summary
+// syslogMsg.Level
+// syslogMsg.Description
+// "1": send_resolved: true
+// syslogMsg.Time
+// syslogMsg.Status: alertstate: firing: 0, resolved: 1
 func (r *Run) TransferData(ad *AlertData) {
 	for _, at := range ad.Alerts {
 		syslogMsg := &syslogMessage{
