@@ -26,7 +26,7 @@ Usage of ./kafka-adapte:
 
 ### Examples:
 1. Prometheus update alert.yml file and restart 
-	- URL`https://github.com/pingcap/tidb-ansible/blob/jomenxiao/update_alert_yml/roles/prometheus/files/alert.rules.yml`
+	- URL`https://github.com/pingcap/tidb-ansible/tree/master/roles/prometheus/files`
 2. Alertmanager configure file add webhook scope 
 	- `webhook` as first router
 	- `url` URLPath is hardcode `/v1/alertmanager`

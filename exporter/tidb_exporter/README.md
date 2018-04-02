@@ -15,6 +15,8 @@ Usage of ./bin/tidb_exporter:
     	alertmanger list,example:'10.0.3.5:9093,10.0.3.6:9093'
   -daemon
     	run as daemon
+  -grafana-address string
+    	grafan address,example:'http://10.0.3.6:3000'
   -interval int
     	check alive interval (default 180)
   -log-file string
@@ -27,6 +29,8 @@ Usage of ./bin/tidb_exporter:
     	tidb password
   -pd-list string
     	pd list, example:'http://10.0.3.5:2379,http://10.0.3.6:2379'
+  -prometheus-address string
+    	prometheus address,example:'http://10.0.3.6:9090'
   -query-timeout int
     	tidb execute query timeout (default 20)
   -tidb-list string
