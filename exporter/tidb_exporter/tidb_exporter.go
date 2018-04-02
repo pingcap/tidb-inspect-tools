@@ -20,16 +20,18 @@ const (
 )
 
 var (
-	user         = flag.String("user", "root", "tidb user")
-	password     = flag.String("password", "", "tidb password")
-	metrics      = flag.String("metrics", "", "metrics address")
-	querytimeout = flag.Int("query-timeout", 20, "tidb execute query timeout")
-	interval     = flag.Int64("interval", 180, "check alive interval")
-	tidbs        = flag.String("tidb-list", "", "tidb list, example:'10.0.3.5:4000,10.0.3.6:4000'")
-	tikvs        = flag.String("tikv-list", "", "tikv list, example:'10.0.3.5:20160,10.0.3.6:20160'")
-	pds          = flag.String("pd-list", "", "pd list, example:'http://10.0.3.5:2379,http://10.0.3.6:2379'")
-	daemon       = flag.Bool("daemon", false, "run as daemon")
-	alertmangers = flag.String("alertmanger-list", "", "alertmanger list,example:'10.0.3.5:9093,10.0.3.6:9093'")
+	user              = flag.String("user", "root", "tidb user")
+	password          = flag.String("password", "", "tidb password")
+	metrics           = flag.String("metrics", "", "metrics address")
+	querytimeout      = flag.Int("query-timeout", 20, "tidb execute query timeout")
+	interval          = flag.Int64("interval", 180, "check alive interval")
+	tidbs             = flag.String("tidb-list", "", "tidb list, example:'10.0.3.5:4000,10.0.3.6:4000'")
+	tikvs             = flag.String("tikv-list", "", "tikv list, example:'10.0.3.5:20160,10.0.3.6:20160'")
+	pds               = flag.String("pd-list", "", "pd list, example:'http://10.0.3.5:2379,http://10.0.3.6:2379'")
+	daemon            = flag.Bool("daemon", false, "run as daemon")
+	alertmangers      = flag.String("alertmanger-list", "", "alertmanger list,example:'10.0.3.5:9093,10.0.3.6:9093'")
+	prometheusAddress = flag.String("prometheus-address", "", "prometheus address,example:'http://10.0.3.6:9090'")
+	grafanaAddress    = flag.String("grafana-address", "", "grafan address,example:'http://10.0.3.6:3000'")
 
 	logFile  = flag.String("log-file", "", "log filename")
 	logLevel = flag.String("log-level", "info", "log level:panic,fatal,error,warning,info,debug")
@@ -53,13 +55,22 @@ func daemonMode() {
 		go daemonProm(instance)
 	}
 
+	cinterval := time.Duration(*interval) * time.Second
 	if *tidbs != "" {
-		go goroutineTiDB(strings.Split(*tidbs, ","), time.Duration(*interval)*time.Second)
+		go goroutineTiDB(strings.Split(*tidbs, ","), cinterval)
 	}
 
 	if *pds != "" {
-		go goroutinePD(strings.Split(*pds, ","), time.Duration(*interval)*time.Second)
-		go goroutineTiKV(strings.Split(*pds, ","), time.Duration(*interval)*time.Second)
+		go goroutinePD(strings.Split(*pds, ","), cinterval)
+		go goroutineTiKV(strings.Split(*pds, ","), cinterval)
+	}
+
+	if *prometheusAddress != "" {
+		go goroutineProm(*prometheusAddress, cinterval)
+	}
+
+	if *grafanaAddress != "" {
+		go goroutineGrafana(*grafanaAddress, cinterval)
 	}
 
 }
