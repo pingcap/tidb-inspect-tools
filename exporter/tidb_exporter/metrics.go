@@ -8,9 +8,11 @@ import (
 )
 
 const (
-	promTiKVType = "tikv"
-	promTiDBType = "tidb"
-	promPDType   = "pd"
+	promTiKVType    = "tikv"
+	promTiDBType    = "tidb"
+	promPDType      = "pd"
+	promPromType    = "prometheus"
+	promGrafanaType = "grafana"
 
 	checkedAllInstance = "all"
 	checkedFailed      = "failed"
