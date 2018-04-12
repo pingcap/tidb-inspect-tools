@@ -34,11 +34,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/gorilla/mux"
 	"github.com/ngaut/log"
-	"github.com/pingcap/tidb-inspect-tools/metrics/grafana_collector/grafana"
-	"github.com/pingcap/tidb-inspect-tools/metrics/grafana_collector/report"
+	"github.com/pingcap/tidb-inspect-tools/grafana_collector/grafana"
+	"github.com/pingcap/tidb-inspect-tools/grafana_collector/report"
 	"github.com/pingcap/tidb-inspect-tools/pkg/utils"
 )
 
@@ -49,6 +51,8 @@ var (
 	logFile      = flag.String("log-file", "", "log file path")
 	logLevel     = flag.String("log-level", "info", "log level: debug, info, warn, error, fatal")
 	logRotate    = flag.String("log-rotate", "day", "log file rotate type: hour/day")
+	configFile   = flag.String("config", "", "path to configuration file")
+	fontDir      = flag.String("font-dir", "", "ttf fonts directory")
 	printVersion = flag.Bool("V", false, "prints version and exit")
 )
 
@@ -59,6 +63,16 @@ func main() {
 		fmt.Println(utils.GetRawInfo("grafana_collector"))
 		return
 	}
+
+	err := report.SetConfig(*configFile)
+	if err != nil {
+		log.Fatalf("parsing configure file error: %v", err)
+	}
+
+	if *fontDir == "" {
+		log.Fatalf("missing parameter: -font-dir")
+	}
+	report.SetFontDir(*fontDir)
 
 	log.SetLevelByString(*logLevel)
 	if *logFile != "" {
@@ -79,5 +93,20 @@ func main() {
 		ServeReportHandler{grafana.NewV5Client, report.New},
 	)
 
+	sc := make(chan os.Signal, 1)
+	signal.Notify(sc,
+		syscall.SIGKILL,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT)
+
+	go func() {
+		sig := <-sc
+		log.Infof("got signal [%d] to exit.", sig)
+		os.Exit(0)
+	}()
+
 	log.Fatal(http.ListenAndServe(*port, router))
+
 }
