@@ -2,30 +2,32 @@ package main
 
 import (
 	"encoding/json"
-	"strings"
 	"time"
 
 	"github.com/Shopify/sarama"
+	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/unrolled/render"
 )
 
 const (
-	timeFormat = "2006-01-02 15:04:05"
+	timeFormat    = "2006-01-02 15:04:05"
+	maxRetry      = 12
+	retryInterval = 5 * time.Second
 )
 
 //KafkaMsg represents kafka message
 type KafkaMsg struct {
-	Title       string `json:"title"`
-	Source      string `json:"source"`
-	Node        string `json:"node"`
+	Title       string `json:"event_object"`
+	Source      string `json:"object_name"`
+	Instance    string `json:"object_ip"`
+	Description string `json:"event_msg"`
+	Time        string `json:"event_time"`
+	Level       string `json:"event_level"`
+	Summary     string `json:"summary"`
 	Expr        string `json:"expr"`
-	Description string `json:"description"`
-	URL         string `json:"url"`
-	Level       string `json:"level"`
-	Note        string `json:"note"`
 	Value       string `json:"value"`
-	Time        string `json:"time"`
+	URL         string `json:"url"`
 }
 
 //Run represents runtime information
@@ -43,14 +45,25 @@ func getValue(kv KV, key string) string {
 }
 
 //CreateKafkaProducer creates a new SyncProducer using the given broker addresses and configuration
-func (r *Run) CreateKafkaProducer() error {
-	config := sarama.NewConfig()
-	config.Producer.RequiredAcks = sarama.WaitForLocal
-	config.Producer.Return.Successes = true
-	config.Producer.Partitioner = sarama.NewManualPartitioner
+func (r *Run) CreateKafkaProducer(addrs []string) error {
 	var err error
-	r.KafkaClient, err = sarama.NewSyncProducer(strings.Split(*kafkaAddress, ","), config)
-	return err
+
+	for i := 0; i < maxRetry; i++ {
+		config := sarama.NewConfig()
+		config.Producer.Return.Successes = true
+		config.Producer.RequiredAcks = sarama.WaitForLocal
+
+		r.KafkaClient, err = sarama.NewSyncProducer(addrs, config)
+
+		if err != nil {
+			log.Errorf("create kafka producer with error: %v", err)
+			time.Sleep(retryInterval)
+			continue
+		}
+		return nil
+	}
+
+	return errors.Trace(err)
 }
 
 //PushKafkaMsg pushes message to kafka cluster
@@ -59,9 +72,13 @@ func (r *Run) PushKafkaMsg(msg string) error {
 		Topic: *kafkaTopic,
 		Value: sarama.StringEncoder(msg),
 	}
-	log.Infof("sending message %s to kafka", msg)
-	_, _, err := r.KafkaClient.SendMessage(kafkaMsg)
-	return err
+
+	partition, offset, err := r.KafkaClient.SendMessage(kafkaMsg)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	log.Infof("Produced message %s to kafka cluster partition %d with offset %d", msg, partition, offset)
+	return nil
 }
 
 //TransferData transfers AlertData to string and sends message to kafka
@@ -69,25 +86,25 @@ func (r *Run) TransferData(ad *AlertData) {
 	for _, alert := range ad.Alerts {
 		kafkaMsg := &KafkaMsg{
 			Title:       getValue(alert.Labels, "alertname"),
-			Description: getValue(alert.Annotations, "description"),
-			Expr:        getValue(alert.Labels, "expr"),
-			Level:       getValue(alert.Labels, "level"),
-			Node:        getValue(alert.Labels, "instance"),
 			Source:      getValue(alert.Labels, "env"),
-			Value:       getValue(alert.Annotations, "value"),
-			Note:        getValue(alert.Annotations, "summary"),
-			URL:         alert.GeneratorURL,
+			Instance:    getValue(alert.Labels, "instance"),
+			Description: getValue(alert.Annotations, "description"),
 			Time:        alert.StartsAt.Format(timeFormat),
+			Level:       getValue(alert.Labels, "level"),
+			Summary:     getValue(alert.Annotations, "summary"),
+			Expr:        getValue(alert.Labels, "expr"),
+			Value:       getValue(alert.Annotations, "value"),
+			URL:         alert.GeneratorURL,
 		}
 
 		alertByte, err := json.Marshal(kafkaMsg)
 		if err != nil {
-			log.Errorf("can not marshal KafkaMsg with error %v", err)
+			log.Errorf("Failed to marshal KafkaMsg: %v", err)
 			continue
 		}
 
 		if err := r.PushKafkaMsg(string(alertByte)); err != nil {
-			log.Errorf("sending message to kafka with error %v", err)
+			log.Errorf("Failed to produce message to kafka cluster: %v", err)
 		}
 	}
 }
@@ -95,12 +112,10 @@ func (r *Run) TransferData(ad *AlertData) {
 //Scheduler for monitoring chan data
 func (r *Run) Scheduler() {
 	for {
-		lenAlertMsgs := len(r.AlertMsgs)
-		if lenAlertMsgs > 0 {
-			for i := 0; i < lenAlertMsgs; i++ {
-				r.TransferData(<-r.AlertMsgs)
-			}
+		for alert := range r.AlertMsgs {
+			r.TransferData(alert)
 		}
+
 		time.Sleep(3 * time.Second)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/ngaut/log"
@@ -25,6 +26,8 @@ func main() {
 	if *kafkaAddress == "" {
 		log.Fatalf("missing parameter: -kafka-address")
 	}
+	addrs := strings.Split(*kafkaAddress, ",")
+
 	if *kafkaTopic == "" {
 		log.Fatalf("missing parameter: -kafka-topic")
 	}
@@ -43,9 +46,8 @@ func main() {
 		AlertMsgs: make(chan *AlertData, 1000),
 	}
 
-	if err := r.CreateKafkaProducer(); err != nil {
-		log.Errorf("create kafka producer with error %v", err)
-		return
+	if err := r.CreateKafkaProducer(addrs); err != nil {
+		log.Fatalf("Failed to create kafka producer with error: %v", err)
 	}
 
 	go r.Scheduler()
@@ -60,7 +62,7 @@ func main() {
 
 	go func() {
 		sig := <-sc
-		log.Infof("got signal [%d] to exit.", sig)
+		log.Infof("got signal [%d] to exit", sig)
 		r.KafkaClient.Close()
 		os.Exit(0)
 	}()
