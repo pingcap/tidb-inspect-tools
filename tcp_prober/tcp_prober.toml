@@ -1,0 +1,27 @@
+## tcp_prober Configuration
+
+[service]
+
+[service.prometheus]
+addr = "172.16.10.49:9090"
+alertname = "Prometheus_is_down"
+summary = "Prometheus is down"
+level = "emergency"
+
+[service.alertmanager]
+addr = "172.16.10.49:9093"
+alertname = "Alertmanager_is_down"
+summary = "Alertmanager is down"
+level = "emergency"
+
+[service.kafka-adapter]
+addr = "172.16.10.49:28082"
+alertname = "Kafka-adapter_server_is_down"
+summary = "Kafka-adapter is down"
+level = "emergency"
+
+[service.blackbox_exporter]
+addr = "172.16.10.49:9115"
+alertname = "Blackbox_exporter_server_is_down"
+summary = "Blackbox_exporter server is down"
+level = "emergency"
