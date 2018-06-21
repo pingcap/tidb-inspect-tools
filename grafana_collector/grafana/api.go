@@ -39,6 +39,12 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/pingcap/tidb-inspect-tools/grafana_collector/config"
+)
+
+var (
+	cfg = config.Cfg
 )
 
 // Client is a Grafana API client
@@ -54,8 +60,6 @@ type client struct {
 	apiToken         string
 	variables        url.Values
 }
-
-var getPanelRetrySleepTime = time.Duration(10) * time.Second
 
 // NewV4Client creates a new Grafana 4 Client. If apiToken is the empty string,
 // authorization headers will be omitted from requests.
@@ -97,7 +101,8 @@ func (g client) GetDashboard(dashName string) (Dashboard, error) {
 	dashURL := g.getDashEndpoint(dashName)
 	log.Infof("Connecting to dashboard at %s", dashURL)
 
-	client := &http.Client{}
+	clientTimeout := time.Duration(cfg.Grafana.ClientTimeout) * time.Second
+	client := &http.Client{Timeout: clientTimeout}
 	req, err := http.NewRequest("GET", dashURL, nil)
 	if err != nil {
 		return Dashboard{}, fmt.Errorf("error creating getDashboard request for %v: %v", dashURL, err)
@@ -127,9 +132,13 @@ func (g client) GetDashboard(dashName string) (Dashboard, error) {
 func (g client) GetPanelPng(p Panel, dashName string, t TimeRange) (io.ReadCloser, error) {
 	panelURL := g.getPanelURL(p, dashName, t)
 
-	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		return errors.New("Error getting panel png. Redirected to login")
-	}}
+	clientTimeout := time.Duration(cfg.Grafana.ClientTimeout) * time.Second
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return errors.New("Error getting panel png. Redirected to login")
+		},
+		Timeout: clientTimeout,
+	}
 	req, err := http.NewRequest("GET", panelURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating getPanelPng request for %v: %v", panelURL, err)
@@ -143,7 +152,8 @@ func (g client) GetPanelPng(p Panel, dashName string, t TimeRange) (io.ReadClose
 	}
 
 	for retries := 1; retries < 3 && resp.StatusCode != 200; retries++ {
-		delay := getPanelRetrySleepTime * time.Duration(retries)
+		getPanelRetryInterval := time.Duration(cfg.Grafana.RetryInterval) * time.Second
+		delay := getPanelRetryInterval * time.Duration(retries)
 		log.Errorf("Error obtaining render for panel %+v, Status: %v, Retrying after %v...", p, resp.StatusCode, delay)
 		time.Sleep(delay)
 		resp, err = client.Do(req)
@@ -166,7 +176,7 @@ func (g client) GetPanelPng(p Panel, dashName string, t TimeRange) (io.ReadClose
 
 func (g client) getPanelURL(p Panel, dashName string, t TimeRange) string {
 	values := url.Values{}
-	values.Add("theme", "light")
+	values.Add("theme", cfg.Grafana.Theme)
 	values.Add("panelId", strconv.Itoa(p.ID))
 	values.Add("from", t.From)
 	values.Add("to", t.To)
@@ -177,6 +187,7 @@ func (g client) getPanelURL(p Panel, dashName string, t TimeRange) string {
 		values.Add("width", "1000")
 		values.Add("height", "500")
 	}
+	values.Add("timeout", strconv.Itoa(cfg.Grafana.ServerTimeout))
 
 	for k, v := range g.variables {
 		for _, singleValue := range v {
