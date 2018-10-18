@@ -139,14 +139,6 @@
   version = "v4.2.1"
 
 [[projects]]
-  branch = "master"
-  digest = "1:70107cf7ee5eb9e3c3dabe65bcb220bff22ee42e32d9b7fca988e16b8727cacc"
-  name = "github.com/juju/errors"
-  packages = ["."]
-  pruneopts = "UT"
-  revision = "c7d06af17c68cd34c835053720b21f6549d9b0ee"
-
-[[projects]]
   digest = "1:ff5ebae34cfbf047d505ee150de27e60570e8c394b3b8fdbb720ff6ac71985fc"
   name = "github.com/matttproud/golang_protobuf_extensions"
   packages = ["pbutil"]
@@ -208,6 +200,15 @@
   ]
   pruneopts = "UT"
   revision = "5e6e69a5ed381bd4a8afe7cb96cc47f955f6d160"
+
+[[projects]]
+  digest = "1:fd050a80dc534158ed2629f8bedb8d1c2d056546c587c34ac61277719ce403b9"
+  name = "github.com/pkg/errors"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "9316aeb006f59424c65ff505c217f90c43d6445d"
+  source = "https://github.com/pingcap/errors.git"
+  version = "v0.9.0"
 
 [[projects]]
   digest = "1:d14a5f4bfecf017cb780bdde1b6483e5deb87e12c332544d2c430eda58734bcb"
@@ -402,11 +403,11 @@
     "github.com/go-sql-driver/mysql",
     "github.com/golang/protobuf/proto",
     "github.com/gorilla/mux",
-    "github.com/juju/errors",
     "github.com/ngaut/log",
     "github.com/pborman/uuid",
     "github.com/pingcap/check",
     "github.com/pingcap/kvproto/pkg/debugpb",
+    "github.com/pkg/errors",
     "github.com/prometheus/client_golang/prometheus",
     "github.com/prometheus/client_golang/prometheus/promhttp",
     "github.com/prometheus/client_model/go",
