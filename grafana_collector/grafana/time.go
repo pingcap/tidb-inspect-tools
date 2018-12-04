@@ -67,6 +67,11 @@ const (
 	boundaryTimeRegExp = "^(.*?)/([dwMy])$"
 )
 
+// UnixSecond ... returns the number of seconds elapsed since January 1, 1970 UTC.
+func UnixSecond(t time.Time) int64 {
+	return int64(t.UnixNano() / int64(time.Second))
+}
+
 // NewTimeRange ... creates a new TimeRange
 func NewTimeRange(from, to string) TimeRange {
 	if from == "" {
@@ -76,6 +81,22 @@ func NewTimeRange(from, to string) TimeRange {
 		to = "now"
 	}
 	return TimeRange{from, to}
+}
+
+// FromToUnix ... Formats Grafana 'From' time spec into a Unix time, the number
+// of seconds elapsed since January 1, 1970 UTC.
+func (tr TimeRange) FromToUnix() int64 {
+	n := newNow()
+	t := n.parseFrom(tr.From)
+	return UnixSecond(t)
+}
+
+// ToToUnix ... Formats Grafana 'To' time spec into a Unix time, the number
+// of seconds elapsed since January 1, 1970 UTC.
+func (tr TimeRange) ToToUnix() int64 {
+	n := newNow()
+	t := n.parseTo(tr.To)
+	return UnixSecond(t)
 }
 
 // FromFormatted ... Formats Grafana 'From' time spec into absolute printable UTC time
@@ -151,7 +172,6 @@ func add(b boundary) int {
 	if b == To {
 		return 1
 	}
-	// b == From
 	return 0
 }
 
@@ -159,7 +179,6 @@ func daysToWeekBoundary(wd time.Weekday, b boundary) int {
 	if b == To {
 		return 1 + int(time.Saturday) - int(wd)
 	}
-	//b == From
 	return -int(wd)
 }
 

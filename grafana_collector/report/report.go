@@ -36,11 +36,11 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/pborman/uuid"
 	"github.com/pingcap/tidb-inspect-tools/grafana_collector/config"
 	"github.com/pingcap/tidb-inspect-tools/grafana_collector/grafana"
+	"github.com/pkg/errors"
 	"github.com/signintech/gopdf"
 )
 
@@ -57,7 +57,8 @@ const (
 )
 
 // Report groups functions related to genrating the report.
-// After reading and closing the pdf returned by Generate(), call Clean() to delete the pdf file as well the temporary build files
+// After reading and closing the pdf returned by Generate(),
+// call Clean() to delete the pdf file as well the temporary build files
 type Report interface {
 	Generate() (pdf io.ReadCloser, err error)
 	Clean()
@@ -76,13 +77,13 @@ func SetFontDir(fontDir string) {
 }
 
 // New ... creates a new Report
-func New(g grafana.Client, dashName string, time grafana.TimeRange) Report {
-	return new(g, dashName, time)
+func New(g grafana.Client, dashName string, timeRange grafana.TimeRange) Report {
+	return new(g, dashName, timeRange)
 }
 
-func new(g grafana.Client, dashName string, time grafana.TimeRange) *report {
+func new(g grafana.Client, dashName string, timeRange grafana.TimeRange) *report {
 	tmpDir := filepath.Join("tmp", uuid.New())
-	return &report{g, time, dashName, tmpDir}
+	return &report{g, timeRange, dashName, tmpDir}
 }
 
 // Generate returns the report.pdf file. After reading this file it should be Closed()
@@ -91,24 +92,24 @@ func (rep *report) Generate() (pdf io.ReadCloser, err error) {
 	// prepare stage: fetch dashboard json and create image directory
 	dash, err := rep.gClient.GetDashboard(rep.dashName)
 	if err != nil {
-		return nil, errors.Errorf("error fetching dashboard %s: %v", rep.dashName, err)
+		return nil, errors.Errorf("fetching dashboard %s error: %v", rep.dashName, err)
 	}
 
 	err = os.MkdirAll(rep.imgDirPath(), 0777)
 	if err != nil {
-		return nil, errors.Errorf("error creating image directory %s: %v", rep.imgDirPath(), err)
+		return nil, errors.Errorf("creating image directory %s error: %v", rep.imgDirPath(), err)
 	}
 
 	// working stage：fetch panel images
 	err = rep.renderPNGsParallel(dash)
 	if err != nil {
-		return nil, errors.Errorf("error rendering PNGs in parralel for dash %+v: %v", dash, err)
+		return nil, errors.Errorf("rendering PNGs in parallel for dash %+v error: %v. It is recommended to select time range within 6 hours on the Dashboard. Otherwise, the grafana timeout problem might occur.", dash, err)
 	}
 
 	// working stage：render panel images to pdf
 	pdf, err = rep.renderPDF(dash)
 	if err != nil {
-		return nil, errors.Errorf("error rendering pdf for dash %+v: %v", dash, err)
+		return nil, errors.Errorf("rendering pdf for dash %+v error: %v", dash, err)
 	}
 	return pdf, nil
 }
@@ -117,7 +118,7 @@ func (rep *report) Generate() (pdf io.ReadCloser, err error) {
 func (rep *report) Clean() {
 	err := os.RemoveAll(rep.tmpDir)
 	if err != nil {
-		log.Errorf("Error cleaning up tmp dir %s: %v", rep.tmpDir, err)
+		log.Errorf("cleaning up tmp dir %s error: %v", rep.tmpDir, err)
 	}
 }
 
@@ -153,7 +154,7 @@ func (rep *report) renderPNGsParallel(dash grafana.Dashboard) error {
 			for p := range panels {
 				err := rep.renderPNG(p)
 				if err != nil {
-					log.Errorf("Error creating image for panel ID %d: %v", p.ID, err)
+					log.Errorf("creating image for panel ID %d error: %v", p.ID, err)
 					errs <- err
 				}
 			}
@@ -179,20 +180,20 @@ func (rep *report) imgFilePath(p grafana.Panel) string {
 func (rep *report) renderPNG(p grafana.Panel) error {
 	body, err := rep.gClient.GetPanelPng(p, rep.dashName, rep.time)
 	if err != nil {
-		return errors.Errorf("error getting panel %+v: %v", p, err)
+		return errors.Errorf("getting panel %+v error: %v", p, err)
 	}
 	defer body.Close()
 
 	imgPath := rep.imgFilePath(p)
 	file, err := os.Create(imgPath)
 	if err != nil {
-		return errors.Errorf("error creating image file %s: %v", imgPath, err)
+		return errors.Errorf("creating image file %s error: %v", imgPath, err)
 	}
 	defer file.Close()
 
 	_, err = io.Copy(file, body)
 	if err != nil {
-		return errors.Errorf("error copying body to file: %v", err)
+		return errors.Errorf("copying body to file error: %v", err)
 	}
 	return nil
 }
@@ -205,14 +206,14 @@ func (rep *report) NewPDF() (*gopdf.GoPdf, error) {
 	ttfPath := FontDir + cfg.Font.Ttf
 	err := pdf.AddTTFFont(cfg.Font.Family, ttfPath)
 	if err != nil {
-		log.Error(err.Error())
-		return nil, err
+		log.Errorf("add ttf font error: %v", err)
+		return nil, errors.Wrap(err, "add ttf font")
 	}
 
 	err = pdf.SetFont(cfg.Font.Family, "", cfg.Font.Size)
 	if err != nil {
-		log.Error(err.Error())
-		return nil, err
+		log.Errorf("set font error: %v", err)
+		return nil, errors.Wrap(err, "set font")
 	}
 
 	return pdf, nil
@@ -232,6 +233,9 @@ func (rep *report) renderPDF(dash grafana.Dashboard) (outputPDF *os.File, err er
 	log.Infof("PDF templates config: %+v\n", cfg)
 
 	pdf, err := rep.NewPDF()
+	if err != nil {
+		return nil, errors.Wrap(err, "new pdf file")
+	}
 	rep.createHomePage(pdf, dash)
 
 	// setting rectangle size for grafana panel type: Graph/Singlestat
@@ -251,15 +255,21 @@ func (rep *report) renderPDF(dash grafana.Dashboard) (outputPDF *os.File, err er
 
 		// Add two images on every page
 		if count%2 == 0 {
-			err = pdf.Image(imgPath, cfg.Position.X, cfg.Position.Y1, rect)
+			pdf.SetX(cfg.Position.X)
+			pdf.SetY(cfg.Position.TitleY1)
+			pdf.Cell(nil, fmt.Sprintf("Row: %s, Panel: %s", p.RowTitle, p.Title))
+			err = pdf.Image(imgPath, cfg.Position.X, cfg.Position.ImageY1, rect)
 		} else {
-			err = pdf.Image(imgPath, cfg.Position.X, cfg.Position.Y2, rect)
+			pdf.SetX(cfg.Position.X)
+			pdf.SetY(cfg.Position.TitleY2)
+			pdf.Cell(nil, fmt.Sprintf("Row: %s, Panel: %s", p.RowTitle, p.Title))
+			err = pdf.Image(imgPath, cfg.Position.X, cfg.Position.ImageY2, rect)
 			pdf.AddPage()
 		}
 		if err != nil {
-			log.Errorf("Error rendering image %s to PDF: %v", imgPath, err)
+			log.Errorf("rendering image %s to PDF error: %v", imgPath, err)
 		} else {
-			log.Infof("Rendering image to PDF: %s", imgPath)
+			log.Infof("rendering image to PDF: %s", imgPath)
 		}
 		count++
 	}
@@ -267,5 +277,5 @@ func (rep *report) renderPDF(dash grafana.Dashboard) (outputPDF *os.File, err er
 	// WritePdf(pdfPath string) func in gopdf doesn't return error
 	pdf.WritePdf(rep.pdfPath())
 	outputPDF, err = os.Open(rep.pdfPath())
-	return outputPDF, errors.Trace(err)
+	return outputPDF, errors.Wrap(err, "open pdf file")
 }

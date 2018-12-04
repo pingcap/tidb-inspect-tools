@@ -30,7 +30,6 @@
 package grafana
 
 import (
-	"net/url"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -56,9 +55,10 @@ func TestV4Dashboard(t *testing.T) {
 "Meta":
 	{"Slug":"testDash"}
 }`
-		dash := NewDashboard([]byte(v4DashJSON), url.Values{})
+		dash, err := NewDashboard([]byte(v4DashJSON), "", "", TimeRange{"now-1h", "now"})
 
 		Convey("Panel IsSingelStat should work for all panels", func() {
+			So(err, ShouldBeNil)
 			So(dash.Panels[0].IsSingleStat(), ShouldBeTrue)
 			So(dash.Panels[1].IsSingleStat(), ShouldBeFalse)
 			So(dash.Panels[2].IsSingleStat(), ShouldBeTrue)
@@ -86,9 +86,10 @@ func TestV5Dashboard(t *testing.T) {
 "Meta":
 	{"Slug":"testDash"}
 }`
-		dash := NewDashboard([]byte(v5DashJSON), url.Values{})
+		dash, err := NewDashboard([]byte(v5DashJSON), "", "", TimeRange{"now-1h", "now"})
 
 		Convey("Panel IsSingelStat should work for all panels", func() {
+			So(err, ShouldBeNil)
 			So(dash.Panels[0].IsSingleStat(), ShouldBeTrue)
 			So(dash.Panels[1].IsSingleStat(), ShouldBeFalse)
 			So(dash.Panels[2].IsSingleStat(), ShouldBeTrue)
@@ -103,22 +104,34 @@ func TestV5Dashboard(t *testing.T) {
 	})
 }
 
-func TestVariableValues(t *testing.T) {
-	Convey("When creating a dashboard and passing url varialbes in", t, func() {
-		const v5DashJSON = `
-{
-	"Dashboard":
-		{
-		}
-}`
-		vars := url.Values{}
-		vars.Add("var-one", "oneval")
-		vars.Add("var-two", "twoval")
-		dash := NewDashboard([]byte(v5DashJSON), vars)
+func TestGetMetricAndLabel(t *testing.T) {
+	Convey("When analysing a correct TemplatingVariable ", t, func() {
+		variable := TemplatingVariable{"db", "test-cluster", "label_values(tikv_engine_block_cache_size_bytes, db)"}
+		metric, label, err := getMetricAndLabel(variable)
 
-		Convey("The dashboard should contain the variable values in a random order", func() {
-			So(dash.VariableValues, ShouldContainSubstring, "oneval")
-			So(dash.VariableValues, ShouldContainSubstring, "twoval")
+		Convey("metric and label should not be empty and correct", func() {
+			So(err, ShouldBeNil)
+			So(metric, ShouldEqual, "tikv_engine_block_cache_size_bytes")
+			So(label, ShouldEqual, "db")
+		})
+	})
+}
+
+func TestGetMetricAndLabelErrorHandling(t *testing.T) {
+	Convey("When analysing a wrong TemplatingVariable", t, func() {
+		v1 := TemplatingVariable{"db", "test-cluster", "label_values(tikv_engine_block_cache_size_bytes, 2db)"}
+		v2 := TemplatingVariable{"db", "test-cluster", "db, db"}
+
+		metric1, label1, err1 := getMetricAndLabel(v1)
+		metric2, label2, err2 := getMetricAndLabel(v2)
+
+		Convey("should return error", func() {
+			So(err1, ShouldNotBeNil)
+			So(metric1, ShouldBeEmpty)
+			So(label1, ShouldBeEmpty)
+			So(err2, ShouldNotBeNil)
+			So(metric2, ShouldBeEmpty)
+			So(label2, ShouldBeEmpty)
 		})
 	})
 }
